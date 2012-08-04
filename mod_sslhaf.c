@@ -324,6 +324,10 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         // Message length
         ml = (buf[1] * 65536) + (buf[2] * 256) + buf[3];
         
+        if (mt != 1) {
+            return 1;
+        }        
+        
         // Does the message length correspond
         // to the size of our buffer?
         if (ml > len - 4) {
