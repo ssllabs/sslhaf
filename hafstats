@@ -374,16 +374,34 @@ $stats->total = count($results);
 
 foreach($results as $he) {
 	// Handshake
+	if (empty($stats->handshake[$he->handshake])) {
+		$stats->handshake[$he->handshake] = 0;
+	}
+
 	$stats->handshake[$he->handshake]++;
 
 	// Protocols
+	if (empty($stats->protocols[$he->protocol])) {
+		$stats->protocols[$he->protocol] = 0;
+	}
+
 	$stats->protocols[$he->protocol]++;
 
 	// Suites
 	$i = 1000;
 	foreach($he->suites as $s) {
+		if (empty($stats->suites[$s])) {
+			$stats->suites[$s] = 0;
+		}
+
 		$stats->suites[$s]++;
+
+		if (empty($stats->suites_weighted[$s])) {
+			$stats->suites_weighted[$s] = 0;
+		}
+
 		$stats->suites_weighted[$s] += $i;
+
 		$i--;
 	}
 
