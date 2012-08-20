@@ -431,7 +431,7 @@ print_r($stats);
 print("Cipher suite support\n");
 print("--------------------\n");
 foreach($stats->suites as $id => $popularity) {
-	$name = $suites[$id];
+	$name = @$suites[$id];
 	if (empty($name)) {
 		$name = "Unknown 0x" . $id;
 	}
