@@ -161,7 +161,7 @@ typedef struct sslhaf_cfg_t sslhaf_cfg_t;
 #define STATE_READING	2
 #define STATE_GOAWAY	3
 
-#define BUF_LIMIT 	1024
+#define BUF_LIMIT 	4096
 
 #define PROTOCOL_CHANGE_CIPHER_SPEC 	20
 #define PROTOCOL_HANDSHAKE		22
