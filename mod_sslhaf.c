@@ -332,8 +332,8 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         // to the size of our buffer?
         if (ml > len - 4) {
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                "mod_sslhaf: Decoding packet v3 HANDSHAKE: Length mismatch %"
-                APR_SIZE_T_FMT "%" APR_SIZE_T_FMT, ml, len - 4);
+                "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
+                APR_SIZE_T_FMT " got %" APR_SIZE_T_FMT, f->c->remote_ip, ml, len - 4);
         
             return -2;
         }
