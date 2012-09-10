@@ -152,6 +152,9 @@ struct sslhaf_cfg_t {
     
     /* How many output buckets sent before first input data fragment. */
     int in_data_fragment_out_buckets;
+
+    /* Indicates the connection has switched to encrypted handshake messages. */
+    int seen_cipher_change;
 };
 
 typedef struct sslhaf_cfg_t sslhaf_cfg_t;
@@ -304,11 +307,21 @@ static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     unsigned char *buf = cfg->buf;
     apr_size_t len = cfg->buf_len;
-
+    
+    #ifdef ENABLE_DEBUG
+    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
+        "mod_sslhaf [%s]: decode_packet_v3_handshake (len %" APR_SIZE_T_FMT ")",  f->c->remote_ip, len);
+    #endif
+        
     // Loop while there's data in buffer
     while(len > 0) {
         apr_size_t ml;
         int mt;
+        
+        #ifdef ENABLE_DEBUG
+        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
+            "mod_sslhaf [%s]: decode_packet_v3_handshake loop (len %" APR_SIZE_T_FMT,  f->c->remote_ip, len);
+        #endif
 
         // Check for size first        
         if (len < 4) {
@@ -323,6 +336,11 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         
         // Message length
         ml = (buf[1] * 65536) + (buf[2] * 256) + buf[3];
+        
+        #ifdef ENABLE_DEBUG
+        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
+            "mod_sslhaf [%s]: decode_packet_v3_handshake mt %d %" APR_SIZE_T_FMT, f->c->remote_ip, mt, ml);
+        #endif
         
         if (mt != 1) {
             return 1;
@@ -432,7 +450,12 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 static int decode_packet_v3(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     /* Handshake */
     if (cfg->buf_protocol == PROTOCOL_HANDSHAKE) {
-        return decode_packet_v3_handshake(f, cfg);
+        if (cfg->seen_cipher_change == 0) {
+            return decode_packet_v3_handshake(f, cfg);
+        } else {
+            // Ignore encrypted handshake messages
+            return 1;
+        }
     } else
     /* Application data */
     if (cfg->buf_protocol == PROTOCOL_APPLICATION) {
@@ -451,6 +474,11 @@ static int decode_packet_v3(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         }
         
         return 1;
+    } else
+    /* Change cipher spec */
+    if (cfg->buf_protocol == PROTOCOL_CHANGE_CIPHER_SPEC) {
+        cfg->seen_cipher_change = 1;
+        return 1;
     } else {
         // Ignore unknown protocols
         return 1;
@@ -464,8 +492,18 @@ static int decode_packet_v3(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
     const unsigned char *inputbuf, apr_size_t inputlen)
 {
+    #ifdef ENABLE_DEBUG
+    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
+        "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ")", f->c->remote_ip, inputlen);
+    #endif
+        
     // Loop while there's input to process
     while(inputlen > 0) {
+        #ifdef ENABLE_DEBUG
+        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
+        "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ", state %d)", f->c->remote_ip, inputlen, cfg->state);
+        #endif
+        
         // Are we looking for the next packet of data?
         if ((cfg->state == STATE_START)||(cfg->state == STATE_READING)) {
             apr_size_t len;
@@ -532,6 +570,12 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 cfg->state = STATE_BUFFER;
                 cfg->buf_len = 0;
                 cfg->buf_to_go = len;
+
+                #ifdef ENABLE_DEBUG                
+                ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
+                    "mod_sslhaf [%s]: decode_bucket; buffering protocol %d high %d low %d len %" APR_SIZE_T_FMT,
+                    f->c->remote_ip, cfg->buf_protocol, cfg->protocol_high, cfg->protocol_low, len);
+                #endif
             }
             else
             // Is it a SSLv2 ClientHello?
@@ -765,9 +809,11 @@ static int sslhaf_pre_conn(conn_rec *c, void *csd) {
 
     ap_add_input_filter(sslhaf_in_filter_name, NULL, NULL, c);
     ap_add_output_filter(sslhaf_out_filter_name, NULL, NULL, c);
-    
+
+    #ifdef ENABLE_DEBUG    
     ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, c->base_server,
         "mod_sslhaf: Connection from %s", c->remote_ip);
+    #endif
 
     return OK;
 }
