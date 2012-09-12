@@ -1,7 +1,7 @@
 #!/usr/bin/php
 <?php
 
-$pattern = "/^([^]]+\]) (\S+) \"(\d)+\" \"([\d.]+)\" \"([\w,]+)\" \"([01])\" \"(.*)\"$/";
+$pattern = "/^([^]]+\]) (\S+) \"(\d)+\" \"([\d.]+)\" \"([\w,]+)\" \"([0-9,]+)\" \"([01])\" \"(.*)\"$/";
 
 $suitesData = <<< END_OF_DATA
 SSL_CK_RC4_128_WITH_MD5,0x010080,128,SSL_2_0
@@ -351,8 +351,9 @@ while($line = fgets($fh)) {
 			}
 			array_push($he->suites, $s);
 		}
-		$he->beast = $matches[6];
-		$he->ua = $matches[7];
+		$he->compression = $matches[6];
+		$he->beast = $matches[7];
+		$he->ua = $matches[8];
 		// print_r($he);
 
 		$tempResults[$he->ip . "_" . $he->ua] = $he;
@@ -370,6 +371,7 @@ echo("Unique clients: " . count($results) . "\n");
 
 $stats->beast_mitigated = 0;
 $stats->protocols = array();
+$stats->compression_support = 0;
 $stats->total = count($results);
 
 foreach($results as $he) {
@@ -403,6 +405,11 @@ foreach($results as $he) {
 		$stats->suites_weighted[$s] += $i;
 
 		$i--;
+	}
+
+	// Compression
+	if (strstr($he->compression, "01")) {
+	    $he->compression_support++;
 	}
 
 	// Beast

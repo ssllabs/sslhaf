@@ -69,6 +69,9 @@
  *
  * - SSLHAF_BEAST is 1 if the 1/n-1 BEAST mitigation was detected, 0 otherwise. 
  *
+ * - SSLHAF_COMPRESSION contains the list of compression methods offered by the
+ *   client (NULL 0, DEFLATE 1).
+ *
  * - SSLHAF_LOG is defined (and contains "1") only on the first request in a connection. This
  *   variable can be used to reduce the amount of logging (SSL parameters will typically not
  *   change across requests on the same connection). Example:
@@ -155,6 +158,12 @@ struct sslhaf_cfg_t {
 
     /* Indicates the connection has switched to encrypted handshake messages. */
     int seen_cipher_change;
+
+    /* How many compression methods are there. */    
+    int compression_len;
+
+    /* List of all compression methods as a comma-separated string. */    
+    const char *compression_methods;
 };
 
 typedef struct sslhaf_cfg_t sslhaf_cfg_t;
@@ -436,6 +445,36 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             }
             
             *q = '\0';
+            mylen -= cfg->slen * 2;
+            
+            // Compression
+            if (mylen < 1) { // compression data length
+                return -8;
+            }
+            
+            int clen = *p++;
+            mylen--;
+            
+            if (mylen < clen) { // compression data
+                return -9;
+            }
+            
+            cfg->compression_len = clen;
+            q = apr_pcalloc(f->c->pool, (clen * 3) + 1);            
+            cfg->compression_methods = (const char *)q;
+            
+            while(clen--) {
+                if ((const char *)q != cfg->compression_methods) {
+                    *q++ = ',';
+                }
+                
+                c2x(*p, q);
+                p++;
+                q += 2;
+            }
+            
+            *q = '\0';
+            mylen -= cfg->compression_len;
         }
             
         // Skip over the message
@@ -850,6 +889,9 @@ static int sslhaf_post_request(request_rec *r) {
         } else {
             apr_table_setn(r->subprocess_env, "SSLHAF_BEAST", "0");
         }
+        
+        // Expose compression methods
+        apr_table_setn(r->subprocess_env, "SSLHAF_COMPRESSION", cfg->compression_methods);
 
         // Keep track of how many requests there were
         cfg->request_counter++;
