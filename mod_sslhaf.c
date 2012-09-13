@@ -70,7 +70,8 @@
  * - SSLHAF_BEAST is 1 if the 1/n-1 BEAST mitigation was detected, 0 otherwise. 
  *
  * - SSLHAF_COMPRESSION contains the list of compression methods offered by the
- *   client (NULL 0, DEFLATE 1).
+ *   client (NULL 00, DEFLATE 01). The field can be NULL, in which case it will appear
+ *   in the logs as "-". This happens when SSLv2 handshake is used.
  *
  * - SSLHAF_LOG is defined (and contains "1") only on the first request in a connection. This
  *   variable can be used to reduce the amount of logging (SSL parameters will typically not
