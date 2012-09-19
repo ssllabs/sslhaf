@@ -44,7 +44,8 @@
  * to take place):
  *
  *     CustomLog logs/sslhaf.log "%t %h \"%{SSLHAF_HANDSHAKE}e\" \
- *     \"%{SSLHAF_PROTOCOL}e\" \"%{SSLHAF_SUITES}e\" \"%{SSLHAF_BEAST}e\" \"%{User-Agent}i\"" 
+ *     \"%{SSLHAF_PROTOCOL}e\" \"%{SSLHAF_SUITES}e\" \"%{SSLHAF_BEAST}e\" \
+ *     \"%{SSLHAF_COMPRESSION}e\" \"%{User-Agent}i\"" 
  *
  * As an example, these are the values you'd get from a visit by the Google
  * search engine:
