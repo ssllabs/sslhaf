@@ -45,7 +45,8 @@
  *
  *     CustomLog logs/sslhaf.log "%t %h \"%{SSLHAF_HANDSHAKE}e\" \
  *     \"%{SSLHAF_PROTOCOL}e\" \"%{SSLHAF_SUITES}e\" \"%{SSLHAF_BEAST}e\" \
- *     \"%{SSLHAF_COMPRESSION}e\" \"%{User-Agent}i\"" 
+ *     \"%{SSLHAF_COMPRESSION}e\" \"%{SSLHAF_EXTENSIONS_LEN}e\" \"%{SSLHAF_EXTENSIONS}e\" \
+ *     \"%{User-Agent}i\"" 
  *
  * As an example, these are the values you'd get from a visit by the Google
  * search engine:
@@ -166,6 +167,12 @@ struct sslhaf_cfg_t {
 
     /* List of all compression methods as a comma-separated string. */    
     const char *compression_methods;
+    
+    /* How many extensions were there in the handshake? */
+    int extensions_len;
+
+    /* A string that contains the list of all extensions seen in the handshake. */    
+    const char *extensions;
 };
 
 typedef struct sslhaf_cfg_t sslhaf_cfg_t;
@@ -477,6 +484,61 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             
             *q = '\0';
             mylen -= cfg->compression_len;
+            
+            if (mylen == 0) {
+                // It's OK if there is no more data; that means
+                // we're seeing a handshake without any extensions
+                return 1;
+            }
+            
+            // Extensions
+            if (mylen < 2) { // extensions length
+                return -10;
+            }
+                
+            int elen = (*p * 256) + *(p + 1);
+            
+            mylen -= 2;
+            p += 2;
+            
+            if (mylen < elen) { // extension data
+                return -11;
+            }
+            
+            cfg->extensions_len = 0;
+            q = apr_pcalloc(f->c->pool, (elen * 5) + 1);            
+            cfg->extensions = (const char *)q;
+            
+            while(elen > 0) {
+                cfg->extensions_len++;
+                
+                if ((const char *)q != cfg->extensions) {
+                    *q++ = ',';
+                }
+
+                // extension type, byte 1                
+                c2x(*p, q);
+                p++;
+                elen--;
+                q += 2;
+                
+                // extension type, byte 2
+                c2x(*p, q);
+                p++;
+                elen--;
+                q += 2;
+                
+                // extension length
+                int ext1len = (*p * 256) + *(p + 1);
+                p += 2;
+                elen -= 2;
+                
+                // skip over extension data
+                p += ext1len;
+                elen -= ext1len;                
+            }
+            
+            *q = '\0';
         }
             
         // Skip over the message
@@ -894,6 +956,11 @@ static int sslhaf_post_request(request_rec *r) {
         
         // Expose compression methods
         apr_table_setn(r->subprocess_env, "SSLHAF_COMPRESSION", cfg->compression_methods);
+        
+        // Expose extension data
+        char *extensions_len = apr_psprintf(r->pool, "%d", cfg->extensions_len);
+        apr_table_setn(r->subprocess_env, "SSLHAF_EXTENSIONS_LEN", extensions_len);
+        apr_table_setn(r->subprocess_env, "SSLHAF_EXTENSIONS", cfg->extensions);
 
         // Keep track of how many requests there were
         cfg->request_counter++;
