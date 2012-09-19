@@ -668,7 +668,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 inputlen -= 2;
         
                 // Allocate a buffer to hold the entire packet            
-                cfg->buf = apr_pcalloc(f->c->pool, len);
+                cfg->buf = malloc(len);
                 if (cfg->buf == NULL) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Failed to allocate %" APR_SIZE_T_FMT " bytes",
@@ -777,6 +777,10 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 } else {
                     rc = decode_packet_v2(f, cfg);
                 }
+                
+                // Free the packet buffer, which we no longer need
+                free(cfg->buf);
+                cfg->buf = NULL;
                 
                 if (rc < 0) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
@@ -942,6 +946,12 @@ static int sslhaf_post_request(request_rec *r) {
     sslhaf_cfg_t *cfg = ap_get_module_config(r->connection->conn_config, &sslhaf_module);
     
     if ((cfg != NULL)&&(cfg->tsuites != NULL)) {
+        // Release the packet buffer if we're still holding it
+        if (cfg->buf != NULL) {
+            free(cfg->buf);
+            cfg->buf = NULL;
+        }
+        
         // Make the handshake information available to other modules
         apr_table_setn(r->subprocess_env, "SSLHAF_HANDSHAKE", cfg->thandshake);
         apr_table_setn(r->subprocess_env, "SSLHAF_PROTOCOL", cfg->tprotocol);
