@@ -74,6 +74,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *     \"%{SSLHAF_COMPRESSION}e\" \"%{SSLHAF_EXTENSIONS_LEN}e\" \"%{SSLHAF_EXTENSIONS}e\" \
  *     \"%{User-Agent}i\"" 
  *
+ * | NOTE A CustomLog directive placed in the main server context,
+ * |      will not record any traffic arriving to virtual hosts.
+ *
  * As an example, these are the values you'd get from a visit by the Google
  * search engine:
  *
