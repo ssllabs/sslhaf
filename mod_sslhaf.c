@@ -768,7 +768,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 inputlen -= 4;
         
                 // Allocate a buffer to hold the entire packet            
-                cfg->buf = apr_pcalloc(f->c->pool, len);
+                cfg->buf = malloc(len);
                 if (cfg->buf == NULL) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Failed to allocate %" APR_SIZE_T_FMT " bytes",
