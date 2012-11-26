@@ -3,8 +3,45 @@
 
 // NOTE: This script is work in progress.
 
-$pattern = "/^([^]]+\]) (\S+) \"(\d)+\" \"([\d.]+)\" \"([\w,]+)\" \"([-0-9,]+)\" \"([01])\" \"(.*)\"$/";
+$pattern = "/^([^]]+\]) (\S+) \"(\\d+)\" \"([\\d.]+)\" \"([\\w,]+)\" \"([-0-9,]+)\" \"([01])\" \"(\\d+)\" \"([-0-9a-zA-Z,]+)\" \"(.*)\"$/";
 
+
+// Known TLS extensions
+$extensionsData = <<< END_OF_DATA
+0000,server_name
+0001,max_fragment_length
+0002,client_certificate_url
+0003,trusted_ca_keys
+0004,truncated_hmac
+0005,status_request
+0006,user_mapping
+0007,client_authz
+0008,server_authz
+0009,cert_type
+000a,elliptic_curves
+000b,ec_point_formats
+000c,srp
+000d,signature_algorithms
+000e,use_srtp
+000f,heartbeat
+0023,session_ticket
+3374,next_protocol_negotiation
+754f,channel_id
+ff01,renegotiation_info
+END_OF_DATA;
+
+// Convert extension data into a hashmap
+$extensions = array();
+$extLines = preg_split("/\n/", $extensionsData);
+foreach($extLines as $extLine) {
+	$extLine = trim($extLine);
+	
+	$ext = preg_split("/,/", $extLine);
+	$extensions[$ext[0]] = $ext[1];
+}
+
+
+// Known SSL and TLS suites
 $suitesData = <<< END_OF_DATA
 SSL_CK_RC4_128_WITH_MD5,0x010080,128,SSL_2_0
 SSL_CK_RC4_128_EXPORT40_WITH_MD5,0x020080,40,SSL_2_0
@@ -308,7 +345,10 @@ $suites = array();
 $suiteLines = preg_split("/\n/", $suitesData);
 foreach($suiteLines as $suiteLine) {
 	$suiteLine = trim($suiteLine);
-	
+
+	// Ignore comments; this makes it easy for me to
+	// paste the suites from where I keep them always
+	// up-to-date.	
 	if ($suiteLine[0] == '#') {
 		$suiteLine = trim(substr($suiteLine, 1));
 	}
@@ -344,7 +384,11 @@ while($line = fgets($fh)) {
 		$he->ip = $matches[2];
 		$he->handshake = $matches[3];
 		$he->protocol = $matches[4];
+
+		// Do not use suites as a single field
 		//$he->suites_combined = $matches[5];
+
+		// Parse suites
 		$ar = preg_split("/,/", $matches[5]);
 		$he->suites = array();
 		foreach($ar as $s) {
@@ -353,9 +397,25 @@ while($line = fgets($fh)) {
 			}
 			array_push($he->suites, $s);
 		}
+
 		$he->compression = $matches[6];
 		$he->beast = $matches[7];
-		$he->ua = $matches[8];
+
+		// Do not use original extension data
+                //$he->extension_count = $matches[8];
+                //$he->extensions = $matches[9];
+
+		// Parse extensions
+		$he->extensions = array();
+		if (strcmp($matches[9], '-') != 0) {
+			$ar = preg_split("/,/", $matches[9]);
+		
+			foreach($ar as $e) {
+				array_push($he->extensions, $e);
+			}
+		}
+		 
+		$he->ua = $matches[10];
 		// print_r($he);
 
 		$tempResults[$he->ip . "_" . $he->ua] = $he;
@@ -377,6 +437,24 @@ $stats->compression_support = 0;
 $stats->total = count($results);
 
 foreach($results as $he) {
+	// Is a browser?
+	if (starts_with($he->ua, "Mozilla/") == false) {
+		// Do not process data from clients that are
+		// obviously not browsers.
+		continue;
+	} else {
+		// Process what looks like a browser.
+		// $stats->browsers++;
+	}
+
+	foreach($he->extensions as $e) {
+		if (empty($stats->extensions[$e])) {
+			$stats->extensions[$e] = 0;
+		}
+
+		$stats->extensions[$e]++;
+	}
+
 	// Handshake
 	if (empty($stats->handshake[$he->handshake])) {
 		$stats->handshake[$he->handshake] = 0;
@@ -424,10 +502,7 @@ foreach($results as $he) {
 		$stats->rc4++;
 	}
 
-	// Is a browser?
-	if (starts_with($he->ua, "Mozilla/")) {
-		$stats->browsers++;
-	}
+	
 }
 
 ksort($stats->protocols);
@@ -437,14 +512,28 @@ arsort($stats->suites);
 
 print_r($stats);
 
-print("Cipher suite support\n");
-print("--------------------\n");
+print("\n");
+print("Cipher suites (most popular first)\n");
+print("----------------------------------\n");
 foreach($stats->suites as $id => $popularity) {
 	$name = @$suites[$id];
 	if (empty($name)) {
 		$name = "Unknown 0x" . $id;
 	}
-	print($name . " " . $popularity . "\n");
+
+	print($name . " (" . $popularity . ")\n");
+}
+
+print("\n");
+print("Extensions\n");
+print("----------\n");
+foreach($stats->extensions as $id => $popularity) {
+	$name = @$extensions[$id];
+	if (empty($name)) {
+		$name = "Uknown 0x" . $id;
+	}
+
+	print($name . " (" . $popularity . ")\n");
 }
 
 // -- Utilities --
