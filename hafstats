@@ -516,7 +516,7 @@ ksort($stats->protocols);
 ksort($stats->handshake);
 arsort($stats->suites);
 //arsort($stats->suites_weighted);
-arsort($stats->extensions)
+arsort($stats->extensions);
 
 print_r($stats);
 
@@ -541,7 +541,7 @@ foreach($stats->extensions as $id => $popularity) {
 		$name = "Uknown 0x" . $id;
 	}
 
-	print($name . " (" . $popularity . ")\n");
+	print($name . " (" . $popularity . "; " . percent($popularity, $stats->total) . "%)\n");
 }
 
 // -- Utilities --
@@ -554,6 +554,10 @@ class HafEntry {
 function starts_with($haystack, $needle) {
     $length = strlen($needle);
     return (substr($haystack, 0, $length) === $needle);
+}
+
+function percent($v, $t) {
+	return sprintf("%.2f", ($v*100)/$t);
 }
 
 ?>
