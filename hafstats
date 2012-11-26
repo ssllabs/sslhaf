@@ -442,7 +442,7 @@ echo("Unique clients: " . count($results) . "\n");
 $stats->beast_mitigated = 0;
 $stats->protocols = array();
 $stats->compression_support = 0;
-$stats->total = count($results);
+$stats->total = 0;
 
 foreach($results as $he) {
 	// Is a browser?
@@ -451,6 +451,8 @@ foreach($results as $he) {
 		// obviously not browsers.
 		continue;
 	}
+
+	$stats->total++;
 
 	foreach($he->extensions as $e) {
 		if (empty($stats->extensions[$e])) {
@@ -514,6 +516,7 @@ ksort($stats->protocols);
 ksort($stats->handshake);
 arsort($stats->suites);
 //arsort($stats->suites_weighted);
+arsort($stats->extensions)
 
 print_r($stats);
 
