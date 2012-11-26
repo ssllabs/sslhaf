@@ -529,7 +529,7 @@ foreach($stats->suites as $id => $popularity) {
 		$name = "Unknown 0x" . $id;
 	}
 
-	print($name . " (" . $popularity . ")\n");
+	print($name . " (" . $popularity . "; " . percent($popularity, $stats->total) . "%)\n");
 }
 
 print("\n");
