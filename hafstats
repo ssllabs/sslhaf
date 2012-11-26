@@ -400,11 +400,11 @@ foreach($results as $he) {
 
 		$stats->suites[$s]++;
 
-		if (empty($stats->suites_weighted[$s])) {
-			$stats->suites_weighted[$s] = 0;
-		}
+		//if (empty($stats->suites_weighted[$s])) {
+		//	$stats->suites_weighted[$s] = 0;
+		//}
 
-		$stats->suites_weighted[$s] += $i;
+		//$stats->suites_weighted[$s] += $i;
 
 		$i--;
 	}
@@ -433,7 +433,7 @@ foreach($results as $he) {
 ksort($stats->protocols);
 ksort($stats->handshake);
 arsort($stats->suites);
-arsort($stats->suites_weighted);
+//arsort($stats->suites_weighted);
 
 print_r($stats);
 
