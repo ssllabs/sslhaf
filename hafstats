@@ -437,12 +437,13 @@ fclose($fh);
 $results = array_values($tempResults);
 // print_r($results);
 
-echo("Unique clients: " . count($results) . "\n");
+// echo("Unique clients: " . count($results) . "\n");
 
+$stats->total = 0;
 $stats->beast_mitigated = 0;
 $stats->protocols = array();
 $stats->compression_support = 0;
-$stats->total = 0;
+$stats->secure_renegotiation = 0;
 
 foreach($results as $he) {
 	// Is a browser?
@@ -509,7 +510,10 @@ foreach($results as $he) {
 		$stats->rc4++;
 	}
 
-	
+	// Secure renegotiation
+	if ( in_array("ff01", $he->extensions)||in_array("ff", $he->suites) ) {
+		$stats->secure_renegotiation++;
+	}	
 }
 
 ksort($stats->protocols);
