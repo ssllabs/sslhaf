@@ -1,6 +1,14 @@
 #!/usr/bin/env php
 <?php
 
+// By default, we produce statistics only for those
+// clients whose user agent strings look like browsers.
+// Change below to false if you want to see your
+// statistics across all clients (which may involve
+// lots of automated access).
+$BROWSERS_ONLY = true;
+
+
 // NOTE: This script is work in progress.
 
 $pattern = "/^([^]]+\]) (\S+) \"(\\d+)\" \"([\\d.]+)\" \"([\\w,]+)\" \"([-0-9,]+)\" \"([01])\" \"(\\d+)\" \"([-0-9a-zA-Z,]+)\" \"(.*)\"$/";
@@ -438,13 +446,10 @@ $stats->total = count($results);
 
 foreach($results as $he) {
 	// Is a browser?
-	if (starts_with($he->ua, "Mozilla/") == false) {
+	if (($BROWSERS_ONLY)&&(starts_with($he->ua, "Mozilla/") == false)) {
 		// Do not process data from clients that are
 		// obviously not browsers.
 		continue;
-	} else {
-		// Process what looks like a browser.
-		// $stats->browsers++;
 	}
 
 	foreach($he->extensions as $e) {
