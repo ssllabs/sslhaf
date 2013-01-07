@@ -54,9 +54,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *   untouched.
  *
  *
- * To compile and install the module, configure and build libsslhaf,
- * then do this:
- *     # apxs -cia -I sslhaf -Lsslhaf/.libs/ -lsslhaf mod_sslhaf.c
+ * To compile and install the module, do this:
+ *
+ *     # apxs -cia mod_sslhaf.c
  *
  * The above script will try to add a LoadModule statement to your
  * configuration file but it will fail if it can't find at least one
@@ -80,9 +80,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  * As an example, these are the values you'd get from a visit by the Google
  * search engine:
  *
- *     SSLHAF_HANDSHAKE 	2
- *     SSLHAF_PROTOCOL		3.1
- *     SSLHAF_SUITES		04,010080,05,0a
+ *     SSLHAF_HANDSHAKE     2
+ *     SSLHAF_PROTOCOL      3.1
+ *     SSLHAF_SUITES        04,010080,05,0a
  *
  * The tokens have the following meaning:
  *
@@ -176,6 +176,70 @@ static char *mod_sslhaf_generate_sha1(apr_pool_t *pool, char *data, int len) {
 }
 #endif
 
+
+
+/**
+ * Perform controlled allocation on behalf of the library
+ */
+static void* mod_sslhaf_alloc(sslhaf_cfg_t *cfg, size_t size) {
+    conn_rec *c = cfg->user_data;
+
+    return apr_palloc(c->pool, size);
+}
+
+/**
+ * Perform controlled free on behalf of the library
+ */
+static void mod_sslhaf_free(sslhaf_cfg_t *cfg, void *obj) {
+}
+
+/**
+ * Perform a stream printf style write
+ */
+static char* mod_sslhaf_snprintf(sslhaf_cfg_t *cfg,
+        char *buf, size_t len, const char *format, ...) {
+    va_list args;
+    conn_rec *c = cfg->user_data;
+
+    va_start(args, format);
+    if (buf == NULL) {
+        buf = apr_pvsprintf(c->pool, format, args);
+    } else {
+        vsnprintf(buf, len, format, args);
+    }
+    va_end(args);
+
+    return buf;
+}
+
+/**
+ * Receive log messages from libsslhaf and output them as Apache log messages
+ */
+static char mod_sslhaf_log_buf[MAX_STRING_LEN];
+static void mod_sslhaf_log(sslhaf_cfg_t *cfg, const char *format, ...) {
+    va_list args;
+    conn_rec *c = cfg->user_data;
+    apr_size_t len;
+
+    if (c == NULL)
+        return;
+
+    len = apr_snprintf(mod_sslhaf_log_buf, MAX_STRING_LEN,
+        "mod_sslhaf [%s]: ", c->remote_ip);
+    if (len == 0)
+        return;
+
+    va_start(args, format);
+    apr_vsnprintf(mod_sslhaf_log_buf + len, MAX_STRING_LEN - len,
+        format, args);
+    va_end(args);
+
+    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, c->base_server,
+        mod_sslhaf_log_buf, NULL);
+}
+
+
+
 /**
  * Monitor outbound data and count buckets. This will help us determine
  * if input data is fragmented (we see more than one inbound bucket before
@@ -219,7 +283,7 @@ static apr_status_t mod_sslhaf_out_filter(ap_filter_t *f, apr_bucket_brigade *bb
 }
 
 /**
- * This input filter will basicall sniff on a connection and analyse
+ * This input filter will basically sniff on a connection and analyse
  * the packets when it detects SSL.
  */
 static apr_status_t mod_sslhaf_in_filter(ap_filter_t *f,
@@ -239,7 +303,7 @@ static apr_status_t mod_sslhaf_in_filter(ap_filter_t *f,
     }
 
     // Sanity check first
-    if (cfg->state == STATE_GOAWAY) {
+    if (cfg->state == SSLHAF_STATE_GOAWAY) {
         return ap_get_brigade(f->next, bb, mode, block, readbytes);
     }
 
@@ -247,7 +311,7 @@ static apr_status_t mod_sslhaf_in_filter(ap_filter_t *f,
     status = ap_get_brigade(f->next, bb, mode, block, readbytes);
     if (status != APR_SUCCESS) {
         // Do not log, since we're passing the status anyway
-        cfg->state = STATE_GOAWAY;
+        cfg->state = SSLHAF_STATE_GOAWAY;
 
         return status;
     }
@@ -271,9 +335,9 @@ static apr_status_t mod_sslhaf_in_filter(ap_filter_t *f,
             }
 
             // Look into the bucket
-            if (sslhaf_decode_bucket(f,
-                    cfg, (const unsigned char *)buf, buflen) <= 0) {
-                cfg->state = STATE_GOAWAY;
+            if (sslhaf_decode_buffer(cfg,
+                    (const unsigned char *)buf, buflen) <= 0) {
+                cfg->state = SSLHAF_STATE_GOAWAY;
             }
         }
     }
@@ -293,8 +357,14 @@ static int mod_sslhaf_pre_conn(conn_rec *c, void *csd) {
     //      be able to detect that. It wouldn't matter, though, because
     //      Apache will not process such a request.
 
-    cfg = apr_pcalloc(c->pool, sizeof(*cfg));
-    if (cfg == NULL) return OK;
+    cfg = sslhaf_cfg_create(
+        c,
+        &mod_sslhaf_alloc,
+        &mod_sslhaf_free,
+        &mod_sslhaf_snprintf,
+        &mod_sslhaf_log);
+    if (cfg == NULL)
+        return OK;
 
     ap_set_module_config(c->conn_config, &mod_sslhaf_module, cfg);
 
@@ -319,9 +389,11 @@ static int mod_sslhaf_post_request(request_rec *r) {
 
     if ((cfg != NULL)&&(cfg->tsuites != NULL)) {
         // Release the packet buffer if we're still holding it
-        if (cfg->buf != NULL) {
-            free(cfg->buf);
-            cfg->buf = NULL;
+        if (cfg->inputbuf != NULL) {
+            cfg->inputbuf = NULL;
+            cfg->inputbuflen = 0;
+            cfg->inputbufoff = 0;
+            cfg->inputtogo = 0;
         }
 
         // Make the handshake information available to other modules

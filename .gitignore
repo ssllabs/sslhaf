@@ -21,6 +21,9 @@
 /libtool
 /ltmain.sh
 /missing
+/mod_sslhaf.la
+/mod_sslhaf.o
+/mod_sslhaf.slo
 /sslhaf.pc
 /sslhaf/.deps/
 /sslhaf/.libs/

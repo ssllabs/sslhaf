@@ -62,9 +62,14 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef SSLHAF_H
 #define SSLHAF_H
 
-#include <apr.h>
-#include <util_filter.h>
+#include <stdint.h>
+#include <stddef.h>
 
+
+
+/**
+ * The sslhaf work stucture
+ */
 struct sslhaf_cfg_t {
     /* Inspection state; see above for the constants. */
     int state;
@@ -72,10 +77,12 @@ struct sslhaf_cfg_t {
     /* The buffer we use to store the first SSL packet.
      * Allocated from the connection pool.
      */
-    int buf_protocol;
-    unsigned char *buf;
-    apr_size_t buf_len;
-    apr_size_t buf_to_go;
+    uint8_t record_type;
+
+    unsigned char *inputbuf;
+    size_t inputbuflen;
+    size_t inputbufoff;
+    size_t inputtogo;
 
     /* The client hello version used; 2 or 3. */
     unsigned int hello_version;
@@ -93,7 +100,7 @@ struct sslhaf_cfg_t {
      */
     const char *suites;
 
-    /* Handshake version as string. */
+    /* Handkshake version as string. */
     const char *thandshake;
 
     /* Protocol version number as string. */
@@ -131,26 +138,129 @@ struct sslhaf_cfg_t {
 
     /* A string that contains the list of all extensions seen in the handshake. */
     const char *extensions;
+
+    /* User data */
+    void *user_data;
+
+    /* A pointer to the controlled memory alloc function */
+    void* (*alloc_fn)(struct sslhaf_cfg_t *cfg, size_t size);
+    /* A pointer to the controlled memory free function */
+    void (*free_fn)(struct sslhaf_cfg_t *cfg, void* obj);
+    /* A pointer to a limited stream printf style function.
+     * If buf is NULL, size is ignored and the buffer will be dynamically allocated */
+    char* (*snprintf_fn)(struct sslhaf_cfg_t *cfg,
+            char *inputbuf, size_t len, const char *format, ...);
+    /* A pointer to an error logging printf style function */
+    void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...);
 };
 
 typedef struct sslhaf_cfg_t sslhaf_cfg_t;
 
-#define STATE_START     0
-#define STATE_BUFFER    1
-#define STATE_READING   2
-#define STATE_GOAWAY    3
 
-#define BUF_LIMIT   16384
-
-#define PROTOCOL_CHANGE_CIPHER_SPEC     20
-#define PROTOCOL_HANDSHAKE      22
-#define PROTOCOL_APPLICATION        23
 
 /**
- * Deal with a single bucket. We look for a handshake SSL packet, buffer
+ * Parsing states and limits
+ */
+#define SSLHAF_STATE_START                                  0
+#define SSLHAF_STATE_BUFFER                                 1
+#define SSLHAF_STATE_READING                                2
+#define SSLHAF_STATE_GOAWAY                                 3
+
+#define SSLHAF_BUF_LIMIT                                    16384
+
+
+
+/**
+ * SSLv3+ definitions
+ */
+#define SSLHAF_PROTOCOL_RECORD_TYPE_CHANGE_CIPHER_SPEC      20
+#define SSLHAF_PROTOCOL_RECORD_TYPE_ALERT                   21
+#define SSLHAF_PROTOCOL_RECORD_TYPE_HANDSHAKE               22
+#define SSLHAF_PROTOCOL_RECORD_TYPE_APPLICATION             23
+
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_HELLO_REQUEST          0
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_CLIENT_HELLO           1
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_SERVER_HELLO           2
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_CERTIFICATE            11
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_SERVER_KEY_EXCHANGE    12
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_CERTIFICATE_REQUEST    13
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_SERVER_HELLO_DONE      14
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_CERTIFICATE_VERIFY     15
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_CLIENT_KEY_EXCHANGE    16
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_FINISHED               12
+
+
+
+/**
+ * SSLv2 definitions
+ */
+#define SSLHAF_PROTOCOL_RECORD_TYPE_2_0_HANDSHAKE           128
+
+#define SSLHAF_PROTOCOL_MESSAGE_TYPE_2_0_CLIENT_HELLO       1
+
+
+
+/**
+ * Cipher description
+ */
+enum haf_cipher_group {
+    haf_cg_UNKNOWN =                                        0,
+    haf_cg_SSL_2_0,
+    haf_cg_SSL_3_0,
+    haf_cg_TLS_1_0,
+    haf_cg_TLSKRB,
+    haf_cg_TLSAES,
+    haf_cg_TLSMISTY1,
+    haf_cg_TLSCAM,
+    haf_cg_TLSPSK,
+    haf_cg_SEED,
+    haf_cg_TLS_1_1,
+    haf_cg_TLSECC,
+    haf_cg_TLSSRP,
+    haf_cg_TLSPSK_NULL,
+    haf_cg_TLS_1_2,
+    haf_cg_56bit,
+    haf_cg_TLSAES_GCM,
+    haf_cg_NSS,
+    haf_cg_RI,
+    haf_cg_END,
+};
+
+struct haf_cipher_description {
+    const char* name;
+    uint16_t id;
+    uint16_t key_size;
+    enum haf_cipher_group group;
+};
+
+
+
+/**
+ * Get a description of a cipher given its id code
+ */
+struct haf_cipher_description *get_cipher_description(uint32_t id);
+
+/**
+ * Create and initialise a sslhaf_cfg object
+ */
+sslhaf_cfg_t *sslhaf_cfg_create(
+    void *user_data,
+    void* (*alloc_fn)(struct sslhaf_cfg_t *cfg, size_t size),
+    void (*free_fn)(struct sslhaf_cfg_t *cfg, void* obj),
+    char* (*snprintf_fn)(struct sslhaf_cfg_t *cfg,
+            char *msgbuf, size_t len, const char *format, ...),
+    void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...));
+
+/**
+ * Cleanup and free a sslhaf_cfg object
+ */
+void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg);
+
+/**
+ * Deal with a single buffer. We look for a handshake SSL packet, buffer
  * it (possibly across several invocations), then invoke a function to analyse it.
  */
-int sslhaf_decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
-    const unsigned char *inputbuf, apr_size_t inputlen);
+int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
+    const unsigned char *inputbuf, size_t inputlen);
 
 #endif /* SSLHAF_H */

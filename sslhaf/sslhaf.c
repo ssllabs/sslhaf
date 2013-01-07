@@ -39,8 +39,56 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "sslhaf.h"
 
-#include <apr_strings.h>
-#include <http_log.h>
+#include <string.h>
+#include <errno.h>
+
+
+
+#if defined(__x86_64__)
+# define SSLHAF_SIZE_T_FMT                                     "lu"
+#else
+# define SSLHAF_SIZE_T_FMT                                     "d"
+#endif
+
+
+
+sslhaf_cfg_t *sslhaf_cfg_create(
+        void *user_data,
+        void* (*alloc_fn)(struct sslhaf_cfg_t *cfg, size_t size),
+        void (*free_fn)(struct sslhaf_cfg_t *cfg, void* obj),
+        char* (*snprintf_fn)(struct sslhaf_cfg_t *cfg,
+                char *inputbuf, size_t len, const char *format, ...),
+        void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...)) {
+    sslhaf_cfg_t *cfg;
+    sslhaf_cfg_t temp_cfg;
+    temp_cfg.user_data = user_data;
+
+    cfg = (*alloc_fn)(&temp_cfg, sizeof(*cfg));
+    if (cfg == NULL)
+        return NULL;
+
+    cfg->user_data = user_data;
+    cfg->alloc_fn = alloc_fn;
+    cfg->free_fn = free_fn;
+    cfg->snprintf_fn = snprintf_fn;
+    cfg->log_fn = log_fn;
+
+    return cfg;
+}
+
+void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg) {
+    cfg->inputbuf = NULL;
+    cfg->suites = NULL;
+    cfg->thandshake = NULL;
+    cfg->tprotocol = NULL;
+    cfg->tsuites = NULL;
+    cfg->ipaddress_hash = NULL;
+    cfg->compression_methods = NULL;
+    cfg->extensions = NULL;
+    cfg->user_data = NULL;
+}
+
+
 
 /**
  * Convert one byte into its hexadecimal representation.
@@ -55,52 +103,69 @@ static unsigned char *c2x(unsigned what, unsigned char *where) {
     return where;
 }
 
+
+
 /**
  * Decode SSLv2 packet.
  */
-static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
-    unsigned char *buf = cfg->buf;
-    apr_size_t len = cfg->buf_len;
-    int cslen;
+int decode_packet_v2(sslhaf_cfg_t *cfg) {
     unsigned char *q;
+    unsigned char *inputbuf = cfg->inputbuf + cfg->inputbufoff;
+    size_t inputlen = cfg->inputbuflen - cfg->inputbufoff;
+    int cslen;
+    int sidlen;
+    int chlen;
 
     // There are 6 bytes before the list of cipher suites:
     // cipher suite length (2 bytes), session ID length (2 bytes)
     // and challenge length (2 bytes).
-    if (len < 6) {
-        return -1;
-    }
+    if (inputlen < 6)
+        return -EAGAIN;
 
     // How many bytes do the cipher suites consume?
-    cslen = (buf[0] * 256) + buf[1];
+    cslen = (inputbuf[0] << 8) + inputbuf[1];
+    // How many bytes does the sessionid consume?
+    sidlen = (inputbuf[2] << 8) + inputbuf[3];
+    // How many bytes does the challenge consume?
+    chlen = (inputbuf[4] << 8) + inputbuf[5];
+
+    // validate lengths
+    if ((cslen + sidlen + chlen) != cfg->inputtogo) {
+        if (cfg->log_fn != NULL)
+            cfg->log_fn(cfg,
+                "TLS handshake sections length doesn't match packet size: "
+                "%" SSLHAF_SIZE_T_FMT " != " SSLHAF_SIZE_T_FMT,
+                    (cslen + sidlen + chlen), cfg->inputtogo);
+        return -EINVAL;
+    }
 
     // Skip over to the list.
-    buf += 6;
-    len -= 6;
+    cfg->inputbufoff += 6;
+    cfg->inputtogo -= 6;
+    inputbuf += 6;
+    inputlen -= 6;
 
     // Check that we have the suites in the buffer.
-    if (len < (apr_size_t)cslen) {
-        return -2;
+    if (inputlen < (size_t)cslen) {
+        return -EAGAIN;
     }
 
     // In SSLv2 each suite consumes 3 bytes.
     cslen = cslen / 3;
 
-    // Keep the pointer to where the suites begin. The memory
-    // was allocated from the connection pool, so it should
-    // be around for as long as we need it.
+    // Keep the pointer to where the suites begin.
     cfg->slen = cslen;
-    cfg->suites = (const char *)buf;
+    cfg->suites = (const char *)inputbuf;
 
-    cfg->thandshake = apr_psprintf(f->c->pool, "%i", cfg->hello_version);
-    cfg->tprotocol = apr_psprintf(f->c->pool, "%i.%i", cfg->protocol_high, cfg->protocol_low);
+    cfg->thandshake = cfg->snprintf_fn(cfg, NULL, 0, "%i", cfg->hello_version);
+    cfg->tprotocol = cfg->snprintf_fn(cfg, NULL, 0, "%i.%i", cfg->protocol_high, cfg->protocol_low);
 
     // Create a list of suites as text, for logging. Each 3-byte
     // suite can consume up to 6 bytes (in hexadecimal form) with
     // an additional byte for a comma. We need 9 bytes at the
     // beginning (handshake and version), as well as a byte for
     // the terminating NUL byte.
-    q = apr_pcalloc(f->c->pool, (cslen * 7) + 1);
+    q = cfg->alloc_fn(cfg, (cslen * 7) + 1);
     if (q == NULL) {
         return -3;
     }
@@ -113,23 +178,23 @@ static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             *q++ = ',';
         }
 
-        if (*buf != 0) {
-            c2x(*buf, q);
+        if (*inputbuf != 0) {
+            sslhaf_c2x(*inputbuf, q);
             q += 2;
 
-            c2x(*(buf + 1), q);
+            sslhaf_c2x(*(inputbuf + 1), q);
             q += 2;
         } else {
-            if (*(buf + 1) != 0) {
-                c2x(*(buf + 1), q);
+            if (*(inputbuf + 1) != 0) {
+                sslhaf_c2x(*(inputbuf + 1), q);
                 q += 2;
             }
         }
 
-        c2x(*(buf + 2), q);
+        sslhaf_c2x(*(inputbuf + 2), q);
         q += 2;
 
-        buf += 3;
+        inputbuf += 3;
     }
 
     *q = '\0';
@@ -140,32 +205,35 @@ static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 /**
  * Decode SSLv3+ packet containing handshake data.
  */
-static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
-    unsigned char *buf = cfg->buf;
-    apr_size_t len = cfg->buf_len;
+static int decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
+    unsigned char *buf = cfg->inputbuf;
+    size_t len = cfg->inputbuflen;
 
     #ifdef ENABLE_DEBUG
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-        "mod_sslhaf [%s]: decode_packet_v3_handshake (len %" APR_SIZE_T_FMT ")",
-        f->c->remote_ip, len);
+    if (cfg->log_fn != NULL)
+        cfg->log_fn(cfg,
+            "decode_packet_v3_handshake (len %" SSLHAF_SIZE_T_FMT ")",
+                len);
     #endif
 
     // Loop while there's data in buffer
-    while(len > 0) {
-        apr_size_t ml;
+    while (len > 0) {
+        size_t ml;
         int mt;
 
         #ifdef ENABLE_DEBUG
-        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-            "mod_sslhaf [%s]: decode_packet_v3_handshake loop (len %" APR_SIZE_T_FMT,
-            f->c->remote_ip, len);
+        if (cfg->log_fn != NULL)
+            cfg->log_fn(cfg,
+                "decode_packet_v3_handshake loop (len %" SSLHAF_SIZE_T_FMT,
+                    len);
         #endif
 
         // Check for size first
         if (len < 4) {
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Packet too small %" APR_SIZE_T_FMT,
-                f->c->remote_ip, len);
+            if (cfg->log_fn != NULL)
+                cfg->log_fn(cfg,
+                    "Decoding packet v3 HANDSHAKE: Packet too small %" SSLHAF_SIZE_T_FMT,
+                        len);
 
             return -1;
         }
@@ -177,9 +245,10 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         ml = (buf[1] * 65536) + (buf[2] * 256) + buf[3];
 
         #ifdef ENABLE_DEBUG
-        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-            "mod_sslhaf [%s]: decode_packet_v3_handshake mt %d %" APR_SIZE_T_FMT,
-            f->c->remote_ip, mt, ml);
+        if (cfg->log_fn != NULL)
+            cfg->log_fn(cfg,
+                "decode_packet_v3_handshake mt %d %" SSLHAF_SIZE_T_FMT,
+                    mt, ml);
         #endif
 
         if (mt != 1) {
@@ -189,9 +258,11 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         // Does the message length correspond
         // to the size of our buffer?
         if (ml > len - 4) {
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
-                APR_SIZE_T_FMT " got %" APR_SIZE_T_FMT, f->c->remote_ip, ml, len - 4);
+            if (cfg->log_fn != NULL)
+                cfg->log_fn(cfg,
+                    "Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
+                    SSLHAF_SIZE_T_FMT " got %" SSLHAF_SIZE_T_FMT,
+                        ml, len - 4);
 
             return -2;
         }
@@ -200,7 +271,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         if (mt == 1) {
             unsigned char *p = buf + 4; // skip over the message type and length
             unsigned char *q;
-            apr_size_t mylen = ml;
+            size_t mylen = ml;
             int idlen;
             int cslen;
 
@@ -220,7 +291,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             p += 1; // ID len
             mylen -= 1;
 
-            if (mylen < (apr_size_t)idlen) { // for the ID
+            if (mylen < (size_t)idlen) { // for the ID
                 return -5;
             }
 
@@ -237,7 +308,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             p += 2; // Cipher Suites len
             mylen -= 2;
 
-            if (mylen < (apr_size_t)cslen * 2) { // for the suites
+            if (mylen < (size_t)cslen * 2) { // for the suites
                 return -7;
             }
 
@@ -247,11 +318,11 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             cfg->slen = cslen;
             cfg->suites = (const char *)p;
 
-            cfg->thandshake = apr_psprintf(f->c->pool, "%d", cfg->hello_version);
-            cfg->tprotocol = apr_psprintf(f->c->pool, "%d.%d", cfg->protocol_high, cfg->protocol_low);
+            cfg->thandshake = cfg->snprintf_fn(cfg, NULL, 0, "%d", cfg->hello_version);
+            cfg->tprotocol = cfg->snprintf_fn(cfg, NULL, 0, "%d.%d", cfg->protocol_high, cfg->protocol_low);
 
             // Create a list of suites as text, for logging
-            q = apr_pcalloc(f->c->pool, (cslen * 7) + 1);
+            q = cfg->alloc_fn(cfg, (cslen * 7) + 1);
             cfg->tsuites = (const char *)q;
 
             // Extract cipher suites; each suite consists of 2 bytes
@@ -261,11 +332,11 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
                 }
 
                 if (*p != 0) {
-                    c2x(*p, q);
+                    sslhaf_c2x(*p, q);
                     q += 2;
                 }
 
-                c2x(*(p + 1), q);
+                sslhaf_c2x(*(p + 1), q);
                 q += 2;
 
                 p += 2;
@@ -287,7 +358,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             }
 
             cfg->compression_len = clen;
-            q = apr_pcalloc(f->c->pool, (clen * 3) + 1);
+            q = cfg->alloc_fn(cfg, (clen * 3) + 1);
             cfg->compression_methods = (const char *)q;
 
             while(clen--) {
@@ -295,7 +366,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
                     *q++ = ',';
                 }
 
-                c2x(*p, q);
+                sslhaf_c2x(*p, q);
                 p++;
                 q += 2;
             }
@@ -324,7 +395,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             }
 
             cfg->extensions_len = 0;
-            q = apr_pcalloc(f->c->pool, (elen * 5) + 1);
+            q = cfg->alloc_fn(cfg, (elen * 5) + 1);
             cfg->extensions = (const char *)q;
 
             while(elen > 0) {
@@ -335,13 +406,13 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
                 }
 
                 // extension type, byte 1
-                c2x(*p, q);
+                sslhaf_c2x(*p, q);
                 p++;
                 elen--;
                 q += 2;
 
                 // extension type, byte 2
-                c2x(*p, q);
+                sslhaf_c2x(*p, q);
                 p++;
                 elen--;
                 q += 2;
@@ -372,18 +443,18 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 /**
  * Decode SSLv3+ packet data.
  */
-static int decode_packet_v3(ap_filter_t *f, sslhaf_cfg_t *cfg) {
+static int decode_packet_v3(sslhaf_cfg_t *cfg) {
     /* Handshake */
-    if (cfg->buf_protocol == PROTOCOL_HANDSHAKE) {
+    if (cfg->record_type == SSLHAF_PROTOCOL_RECORD_TYPE_HANDSHAKE) {
         if (cfg->seen_cipher_change == 0) {
-            return decode_packet_v3_handshake(f, cfg);
+            return decode_packet_v3_handshake(cfg);
         } else {
             // Ignore encrypted handshake messages
-            return 1;
+            return 0;
         }
     } else
     /* Application data */
-    if (cfg->buf_protocol == PROTOCOL_APPLICATION) {
+    if (cfg->record_type == SSLHAF_PROTOCOL_RECORD_TYPE_APPLICATION) {
         // On first data fragment, remember how many
         // output buckets we have seen so far
         if (cfg->in_data_fragments == 0) {
@@ -398,230 +469,290 @@ static int decode_packet_v3(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             }
         }
 
-        return 1;
+        return 0;
     } else
     /* Change cipher spec */
-    if (cfg->buf_protocol == PROTOCOL_CHANGE_CIPHER_SPEC) {
+    if (cfg->record_type == SSLHAF_PROTOCOL_RECORD_TYPE_CHANGE_CIPHER_SPEC) {
         cfg->seen_cipher_change = 1;
-        return 1;
-    } else {
-        // Ignore unknown protocols
-        return 1;
+        return 0;
     }
+
+    // Ignore unknown protocols
+    return 0;
 }
 
-/**
- * Deal with a single bucket. We look for a handshake SSL packet, buffer
- * it (possibly across several invocations), then invoke a function to analyse it.
- */
-int sslhaf_decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
-    const unsigned char *inputbuf, apr_size_t inputlen)
-{
+int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
+        const unsigned char *inputbuf, size_t inputlen) {
     #ifdef ENABLE_DEBUG
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-        "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ")", f->c->remote_ip, inputlen);
+    if (cfg->log_fn != NULL)
+        cfg->log_fn(cfg,
+            "decode_bucket (inputlen %" SSLHAF_SIZE_T_FMT ")",
+                inputbuflen);
     #endif
 
     // Loop while there's input to process
-    while(inputlen > 0) {
+    while (inputlen > 0) {
         #ifdef ENABLE_DEBUG
-        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-        "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ", state %d)", f->c->remote_ip, inputlen, cfg->state);
+        if (cfg->log_fn != NULL)
+            cfg->log_fn(cfg,
+                "decode_bucket (inputlen %" SSLHAF_SIZE_T_FMT ", state %d)",
+                    inputbuflen, cfg->state);
         #endif
 
         // Are we looking for the next packet of data?
-        if ((cfg->state == STATE_START)||(cfg->state == STATE_READING)) {
-            apr_size_t len;
+        if ((cfg->state == SSLHAF_STATE_START) ||
+                (cfg->state == SSLHAF_STATE_READING)) {
+            size_t inputtogo;
 
             // Are we expecting a handshake packet?
-            if (cfg->state == STATE_START) {
-                if ((inputbuf[0] != PROTOCOL_HANDSHAKE)&&(inputbuf[0] != 128)) {
-                    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-                        "mod_sslhaf: First byte (%d) of this connection does not indicate SSL; skipping", inputbuf[0]);
-                        return -1;
+            if (cfg->state == SSLHAF_STATE_START) {
+                if ((inputbuf[0] != SSLHAF_PROTOCOL_RECORD_TYPE_HANDSHAKE) &&
+                        !(inputbuf[0] & SSLHAF_PROTOCOL_RECORD_TYPE_2_0_HANDSHAKE)) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "First byte (%d) of this connection does not indicate SSL; skipping",
+                                inputbuf[0]);
+                    return -ENOTSUP;
                 }
             }
 
             // Check for SSLv3+
-            if (  (inputbuf[0] == PROTOCOL_HANDSHAKE)
-                ||(inputbuf[0] == PROTOCOL_APPLICATION)
-                ||(inputbuf[0] == PROTOCOL_CHANGE_CIPHER_SPEC))
-            {
-                // Remember protocol
-                cfg->buf_protocol = inputbuf[0];
-
-                // Go over the protocol byte
-                inputbuf++;
-                inputlen--;
-
+            if ((inputbuf[0] == SSLHAF_PROTOCOL_RECORD_TYPE_HANDSHAKE) ||
+                    (inputbuf[0] == SSLHAF_PROTOCOL_RECORD_TYPE_APPLICATION) ||
+                    (inputbuf[0] == SSLHAF_PROTOCOL_RECORD_TYPE_CHANGE_CIPHER_SPEC)) {
                 // Are there enough bytes to begin analysis?
-                if (inputlen < 4) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                        "mod_sslhaf [%s]: Less than 5 bytes from the packet available in this bucket",
-                        f->c->remote_ip);
-                    return -1;
+                if (inputlen < 11) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "Less than 11 bytes from the packet available in this buffer");
+                    return -EAGAIN;
                 }
 
+                // Check that it is indeed ClientHello
+                if ((inputbuf[0] != SSLHAF_PROTOCOL_RECORD_TYPE_HANDSHAKE) ||
+                        (inputbuf[5] != SSLHAF_PROTOCOL_MESSAGE_TYPE_CLIENT_HELLO)) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "Not SSLv3+ ClientHello (%d, %d)",
+                                inputbuf[0], inputbuf[5]);
+                    return -EINVAL;
+                }
+
+                cfg->record_type = inputbuf[0];
                 cfg->hello_version = 3;
-                cfg->protocol_high = inputbuf[0];
-                cfg->protocol_low = inputbuf[1];
 
-                // Go over the version bytes
-                inputbuf += 2;
-                inputlen -= 2;
+                // Check message version against record version
+                if ((inputbuf[6] < inputbuf[1]) ||
+                        (inputbuf[7] < inputbuf[2])) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "TLS message version is lower than record version: %d.%d < %d.%d",
+                                inputbuf[6], inputbuf[7], inputbuf[1], inputbuf[2]);
+                    return -EINVAL;
+                }
 
-                // Calculate packet length
-                len = (inputbuf[0] * 256) + inputbuf[1];
+                cfg->protocol_high = inputbuf[6];
+                cfg->protocol_low = inputbuf[7];
+
+                // Calculate message length (subtract two for message version)
+                inputtogo = ((inputbuf[8] << 16) | (inputbuf[9] << 8) | inputbuf[10]) - 2;
+
+                // Check message length against record length
+                if (inputtogo != (((inputbuf[3] << 8) | inputbuf[4]) - 2)) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "TLS message length field mismatch: %d != %d - 4",
+                                ((inputbuf[8] << 16) | (inputbuf[9] << 8) | inputbuf[10]),
+                                ((inputbuf[3] << 8) | inputbuf[4]));
+                    return -EINVAL;
+                }
+
+                // Zero record size?
+                if (inputtogo == 0) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "TLS record too short: %" SSLHAF_SIZE_T_FMT,
+                                inputtogo);
+                    return -EINVAL;
+                }
 
                 // Limit what we are willing to accept
-                if ((len <= 0)||(len > BUF_LIMIT)) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                        "mod_sslhaf [%s]: TLS record too long: %" APR_SIZE_T_FMT "; limit %d",
-                        f->c->remote_ip, len, BUF_LIMIT);
-                    return -1;
+                if (inputtogo > SSLHAF_BUF_LIMIT) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "TLS record too long: %" SSLHAF_SIZE_T_FMT "; limit: %d",
+                                inputtogo, SSLHAF_BUF_LIMIT);
+                    return -EINVAL;
                 }
 
-                // Go over the packet length bytes
-                inputbuf += 2;
-                inputlen -= 2;
+                // Go over the record type (1 byte), record version (2 bytes),
+                // record length (2 bytes), message type (1 byte),
+                // message length (3 bytes), message version (2 bytes)
+                inputbuf += 11;
+                inputlen -= 11;
 
-                // Allocate a buffer to hold the entire packet
-                cfg->buf = malloc(len);
-                if (cfg->buf == NULL) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                        "mod_sslhaf [%s]: Failed to allocate %" APR_SIZE_T_FMT " bytes",
-                        f->c->remote_ip, len);
-                    return -1;
+                // Allocate a buffer to hold the entire message
+                cfg->inputbuf = cfg->alloc_fn(cfg, inputtogo);
+                if (cfg->inputbuf == NULL) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "Failed to allocate %" SSLHAF_SIZE_T_FMT " bytes",
+                                inputtogo);
+                    return -ENOMEM;
                 }
+
+                cfg->inputbuflen = 0;
+                cfg->inputbufoff = 0;
+                cfg->inputtogo = inputtogo;
 
                 // Go into buffering mode
-                cfg->state = STATE_BUFFER;
-                cfg->buf_len = 0;
-                cfg->buf_to_go = len;
+                cfg->state = SSLHAF_STATE_BUFFER;
 
                 #ifdef ENABLE_DEBUG
-                ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-                    "mod_sslhaf [%s]: decode_bucket; buffering protocol %d high %d low %d len %" APR_SIZE_T_FMT,
-                    f->c->remote_ip, cfg->buf_protocol, cfg->protocol_high, cfg->protocol_low, len);
+                if (cfg->log_fn != NULL)
+                    cfg->log_fn(cfg,
+                        "decode_bucket; buffering protocol %d high %d low %d len %" SSLHAF_SIZE_T_FMT,
+                            cfg->record_type, cfg->protocol_high, cfg->protocol_low, inputtogo);
                 #endif
             }
             else
             // Is it a SSLv2 ClientHello?
-            if (inputbuf[0] == 128) {
-                // Go over packet type
-                inputbuf++;
-                inputlen--;
-
+            if (inputbuf[0] & SSLHAF_PROTOCOL_RECORD_TYPE_2_0_HANDSHAKE) {
                 // Are there enough bytes to begin analysis?
-                if (inputlen < 4) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                        "mod_sslhaf [%s]: Less than 5 bytes from the packet available in this bucket",
-                        f->c->remote_ip);
-                    return -1;
+                if (inputlen < 5) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "Less than 5 bytes from the packet available in this buffer");
+                    return -EAGAIN;
                 }
 
                 // Check that it is indeed ClientHello
-                if (inputbuf[1] != 1) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                        "mod_sslhaf [%s]: Not SSLv2 ClientHello (%d)",
-                        f->c->remote_ip, inputbuf[1]);
-                    return -1;
+                if (inputbuf[2] != SSLHAF_PROTOCOL_MESSAGE_TYPE_2_0_CLIENT_HELLO) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "Not SSLv2 ClientHello (%d)",
+                                inputbuf[2]);
+                    return -EINVAL;
                 }
 
+                cfg->record_type = SSLHAF_PROTOCOL_RECORD_TYPE_2_0_HANDSHAKE;
                 cfg->hello_version = 2;
 
-                if ((inputbuf[2] == 0x00)&&(inputbuf[3] == 0x02)) {
+                if ((inputbuf[3] == 0x00) && (inputbuf[4] == 0x02)) {
                     // SSL v2 uses 0x0002 for the version number
-                    cfg->protocol_high = inputbuf[3];
-                    cfg->protocol_low = inputbuf[2];
+                    cfg->protocol_high = inputbuf[4];
+                    cfg->protocol_low = inputbuf[3];
                 } else {
                     // SSL v3 will use 0x0300, 0x0301, etc.
-                    cfg->protocol_high = inputbuf[2];
-                    cfg->protocol_low = inputbuf[3];
+                    cfg->protocol_high = inputbuf[3];
+                    cfg->protocol_low = inputbuf[4];
                 }
 
-                // We've already consumed 3 bytes from the packet
-                len = inputbuf[0] - 3;
+                // Calculate message length
+                inputtogo = (((inputbuf[0] & 0x7f) << 8) | inputbuf[1]);
+
+                // Zero record size?
+                if (inputtogo == 0) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "TLS record too short: %" SSLHAF_SIZE_T_FMT,
+                                inputtogo);
+                    return -EINVAL;
+                }
 
                 // Limit what we are willing to accept
-                if ((len <= 0)||(len > BUF_LIMIT)) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                        "mod_sslhaf [%s]: TLS record too long: %" APR_SIZE_T_FMT "; limit %d",
-                        f->c->remote_ip, len, BUF_LIMIT);
-                    return -1;
+                if (inputtogo > SSLHAF_BUF_LIMIT) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "TLS record too long: %" SSLHAF_SIZE_T_FMT "; limit %d",
+                                inputtogo, SSLHAF_BUF_LIMIT);
+                    return -EINVAL;
                 }
 
-                // Go over the packet length (1 byte), message
+                // Go over the packet length (2 bytes), message
                 // type (1 byte) and version (2 bytes)
-                inputbuf += 4;
-                inputlen -= 4;
+                inputbuf += 5;
+                inputlen -= 5;
 
-                // Allocate a buffer to hold the entire packet
-                cfg->buf = malloc(len);
-                if (cfg->buf == NULL) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                        "mod_sslhaf [%s]: Failed to allocate %" APR_SIZE_T_FMT " bytes",
-                        f->c->remote_ip, len);
-                    return -1;
+                // Allocate a buffer to hold the entire message
+                cfg->inputbuf = cfg->alloc_fn(cfg, inputtogo);
+                if (cfg->inputbuf == NULL) {
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "Failed to allocate %" SSLHAF_SIZE_T_FMT " bytes",
+                                inputtogo);
+                    return -ENOMEM;
                 }
+
+                cfg->inputbuflen = 0;
+                cfg->inputbufoff = 0;
+                cfg->inputtogo = inputtogo;
 
                 // Go into buffering mode
-                cfg->state = STATE_BUFFER;
-                cfg->buf_len = 0;
-                cfg->buf_to_go = len;
+                cfg->state = SSLHAF_STATE_BUFFER;
+
+                #ifdef ENABLE_DEBUG
+                if (cfg->log_fn != NULL)
+                    cfg->log_fn(cfg,
+                        "decode_buffer; buffering protocol %d high %d low %d len %" SSLHAF_SIZE_T_FMT,
+                            cfg->record_type, cfg->protocol_high, cfg->protocol_low, inputtogo);
+                #endif
             }
             else {
                 // Unknown protocol
-                return -1;
+                return -EINVAL;
             }
         }
 
         // Are we buffering?
-        if (cfg->state == STATE_BUFFER) {
+        if (cfg->state == SSLHAF_STATE_BUFFER) {
+            size_t tobufferlen =
+                (inputlen < (SSLHAF_BUF_LIMIT - cfg->inputbuflen)) ?
+                    inputlen :
+                    (SSLHAF_BUF_LIMIT - cfg->inputbuflen);
+            int rc;
+
+            memcpy(cfg->inputbuf + cfg->inputbuflen, inputbuf, tobufferlen);
+
+            cfg->inputbuflen += tobufferlen;
+            inputbuf += tobufferlen;
+            inputlen -= tobufferlen;
+
             // How much data is available?
-            if (cfg->buf_to_go <= inputlen) {
-                int rc;
-
-                // We have enough data to complete this packet
-                memcpy(cfg->buf + cfg->buf_len, inputbuf, cfg->buf_to_go);
-                cfg->buf_len += cfg->buf_to_go;
-                inputbuf += cfg->buf_to_go;
-                inputlen -= cfg->buf_to_go;
-                cfg->buf_to_go = 0;
-
+            if (cfg->inputtogo <= (cfg->inputbuflen - cfg->inputbufoff)) {
                 // Decode the packet now
                 if (cfg->hello_version == 3) {
-                    rc = decode_packet_v3(f, cfg);
+                    rc = decode_packet_v3(cfg);
                 } else {
-                    rc = decode_packet_v2(f, cfg);
+                    rc = decode_packet_v2(cfg);
                 }
 
-                // Free the packet buffer, which we no longer need
-                free(cfg->buf);
-                cfg->buf = NULL;
+                cfg->inputbuflen = 0;
+                cfg->inputbufoff = 0;
+                cfg->inputtogo = 0;
 
                 if (rc < 0) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                        "mod_sslhaf [%s]: Packet decoding error rc %d (hello %d)",
-                        f->c->remote_ip, rc, cfg->hello_version);
-                    return -1;
+                    if (cfg->log_fn != NULL)
+                        cfg->log_fn(cfg,
+                            "Packet decoding error rc %d (hello %d)",
+                                rc, cfg->hello_version);
+                    return rc;
                 }
 
                 // Go back to looking at the next packet
-                cfg->state = STATE_READING;
+                cfg->state = SSLHAF_STATE_READING;
+            } else {
+                // Decode part of the packet now
+                if (cfg->hello_version == 3) {
+                    rc = decode_packet_v3(cfg);
+                } else {
+                    rc = decode_packet_v2(cfg);
+                }
 
                 return rc;
-            } else {
-                // There's not enough data; copy what we can and
-                // we'll get the rest later
-                memcpy(cfg->buf + cfg->buf_len, inputbuf, inputlen);
-                cfg->buf_len += inputlen;
-                cfg->buf_to_go -= inputlen;
-                inputbuf += inputlen;
-                inputlen = 0;
             }
         }
     }
 
-    return 1;
+    return 0;
 }
