@@ -356,12 +356,10 @@ $suites = array();
 $suiteLines = preg_split("/\n/", $suitesData);
 foreach($suiteLines as $suiteLine) {
 	$suiteLine = trim($suiteLine);
-
-	// Ignore comments; this makes it easy for me to
-	// paste the suites from where I keep them always
-	// up-to-date.	
+	
+	// Do not process comment lines.
 	if ($suiteLine[0] == '#') {
-		$suiteLine = trim(substr($suiteLine, 1));
+		continue;
 	}
 
 	$suite = preg_split("/,/", $suiteLine);
