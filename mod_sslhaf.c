@@ -133,7 +133,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "sslhaf.h"
 
-module AP_MODULE_DECLARE_DATA mod_sslhaf_module;
+module AP_MODULE_DECLARE_DATA sslhaf_module;
 
 static const char mod_sslhaf_in_filter_name[] = "SSLHAF_IN";
 static const char mod_sslhaf_out_filter_name[] = "SSLHAF_OUT";
@@ -249,7 +249,7 @@ static void mod_sslhaf_log(sslhaf_cfg_t *cfg, const char *format, ...) {
  */
 static apr_status_t mod_sslhaf_out_filter(ap_filter_t *f, apr_bucket_brigade *bb) {
     sslhaf_cfg_t *cfg = ap_get_module_config(f->c->conn_config,
-        &mod_sslhaf_module);
+        &sslhaf_module);
     apr_status_t status;
     apr_bucket *bucket;
 
@@ -295,7 +295,7 @@ static apr_status_t mod_sslhaf_in_filter(ap_filter_t *f,
                                          apr_off_t readbytes)
 {
     sslhaf_cfg_t *cfg = ap_get_module_config(f->c->conn_config,
-        &mod_sslhaf_module);
+        &sslhaf_module);
     apr_status_t status;
     apr_bucket *bucket;
 
@@ -368,7 +368,7 @@ static int mod_sslhaf_pre_conn(conn_rec *c, void *csd) {
     if (cfg == NULL)
         return OK;
 
-    ap_set_module_config(c->conn_config, &mod_sslhaf_module, cfg);
+    ap_set_module_config(c->conn_config, &sslhaf_module, cfg);
 
     ap_add_input_filter(mod_sslhaf_in_filter_name, NULL, NULL, c);
     ap_add_output_filter(mod_sslhaf_out_filter_name, NULL, NULL, c);
@@ -387,7 +387,7 @@ static int mod_sslhaf_pre_conn(conn_rec *c, void *csd) {
  */
 static int mod_sslhaf_post_request(request_rec *r) {
     sslhaf_cfg_t *cfg = ap_get_module_config(r->connection->conn_config,
-        &mod_sslhaf_module);
+        &sslhaf_module);
 
     if ((cfg != NULL)&&(cfg->tsuites != NULL)) {
         // Release the packet buffer if we're still holding it
@@ -455,7 +455,7 @@ static void mod_sslhaf_register_hooks(apr_pool_t *p) {
         NULL, AP_FTYPE_NETWORK - 1);
 }
 
-module AP_MODULE_DECLARE_DATA mod_sslhaf_module = {
+module AP_MODULE_DECLARE_DATA sslhaf_module = {
     STANDARD20_MODULE_STUFF,
     NULL,                       /* create per-dir config */
     NULL,                       /* merge per-dir config */
