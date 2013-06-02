@@ -563,6 +563,10 @@ static int sslhaf_decode_packet_v3(sslhaf_cfg_t *cfg) {
 int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
     const unsigned char *inputbuf, size_t inputlen)
 {
+    if (cfg->state == SSLHAF_STATE_GOAWAY) {
+        return -1;
+    }
+
     #ifdef SSLHAF_ENABLE_DEBUG
     if (cfg->log_fn != NULL)
         cfg->log_fn(cfg,
