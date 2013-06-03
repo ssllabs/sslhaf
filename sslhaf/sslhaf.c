@@ -109,6 +109,8 @@ sslhaf_cfg_t *sslhaf_cfg_create(
     if (cfg == NULL)
         return NULL;
 
+    memset(cfg, 0, sizeof(*cfg));
+
     cfg->user_data = user_data;
     cfg->alloc_fn = alloc_fn;
     cfg->free_fn = free_fn;
