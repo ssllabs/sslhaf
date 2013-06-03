@@ -645,7 +645,7 @@ int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
                 inputlen -= 2;
 
                 // Allocate a buffer to hold the entire packet
-                cfg->buf = malloc(len);
+                cfg->buf = cfg->alloc_fn(cfg, len);
                 if (cfg->buf == NULL) {
                     if (cfg->log_fn != NULL)
                         cfg->log_fn(cfg,
