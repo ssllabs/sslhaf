@@ -151,9 +151,10 @@ struct sslhaf_cfg_t {
     /* A pointer to the controlled memory free function */
     void (*free_fn)(struct sslhaf_cfg_t *cfg, void* obj);
     /* A pointer to a limited stream printf style function.
-     * If buf is NULL, size is ignored and the buffer will be dynamically allocated */
+     * If buf is NULL, len is to be ignored and the return buffer should be
+     * dynamically allocated */
     char* (*snprintf_fn)(struct sslhaf_cfg_t *cfg,
-                         char *inputbuf, size_t len, const char *format, ...);
+                         char *buf, size_t len, const char *format, ...);
     /* A pointer to an error logging printf style function */
     void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...);
 };
