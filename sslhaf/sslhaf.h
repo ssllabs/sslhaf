@@ -62,6 +62,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef SSLHAF_H
 #define SSLHAF_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -185,5 +190,10 @@ void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg);
  */
 int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
     const unsigned char *inputbuf, size_t inputlen);
+
+
+#ifdef __cplusplus
+}; // extern "C"
+#endif
 
 #endif /* SSLHAF_H */
