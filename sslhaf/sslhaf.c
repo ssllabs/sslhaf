@@ -282,6 +282,11 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
     while(len > 0) {
         size_t ml;
         int mt;
+        unsigned char *p = buf + 4; // skip over the message type and length
+        char *q;
+        size_t mylen;
+        int idlen;
+        int cslen;
 
         #ifdef SSLHAF_ENABLE_DEBUG
         if (cfg->log_fn != NULL)
@@ -313,6 +318,7 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
                     mt, ml);
         #endif
 
+        // Is this a Client Hello message?
         if (mt != 1) {
             return 1;
         }
@@ -329,183 +335,176 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
             return -2;
         }
 
-        // Is this a Client Hello message?
-        if (mt == 1) {
-            unsigned char *p = buf + 4; // skip over the message type and length
-            char *q;
-            size_t mylen = ml;
-            int idlen;
-            int cslen;
+        mylen = ml;
 
-            if (mylen < 34) { // for the version number and random value
-                return -3;
-            }
-
-            p += 2; // version number
-            p += 32; // random value
-            mylen -= 34;
-
-            if (mylen < 1) { // for the ID length byte
-                return -4;
-            }
-
-            idlen = *p;
-            p += 1; // ID len
-            mylen -= 1;
-
-            if (mylen < (size_t)idlen) { // for the ID
-                return -5;
-            }
-
-            p += idlen; // ID
-            mylen -= idlen;
-
-            if (mylen < 2) { // for the CS length bytes
-                return -6;
-            }
-
-            cslen = (*p * 256) + *(p + 1);
-            cslen = cslen / 2; // each suite consumes 2 bytes
-
-            p += 2; // Cipher Suites len
-            mylen -= 2;
-
-            if (mylen < (size_t)cslen * 2) { // for the suites
-                return -7;
-            }
-
-            // Keep the pointer to where the suites begin. The memory
-            // was allocated from the connection pool, so it should
-            // be around for as long as we need it.
-            cfg->slen = cslen;
-            cfg->suites = (const char *)p;
-
-            cfg->thandshake = cfg->snprintf_fn(cfg,
-                NULL, 0, "%d", cfg->hello_version);
-            cfg->tprotocol = cfg->snprintf_fn(cfg,
-                NULL, 0, "%d.%d", cfg->protocol_high, cfg->protocol_low);
-
-            // Create a list of suites as text, for logging
-            cfg->tsuites = cfg->alloc_fn(cfg, (cslen * 7) + 1);
-            if (cfg->tsuites == NULL) {
-                return -8;
-            }
-
-            q = cfg->tsuites;
-
-            // Extract cipher suites; each suite consists of 2 bytes
-            while(cslen--) {
-                if (q != cfg->tsuites) {
-                    *q++ = ',';
-                }
-
-                if (*p != 0) {
-                    sslhaf_c2x(*p, q);
-                    q += 2;
-                }
-
-                sslhaf_c2x(*(p + 1), q);
-                q += 2;
-
-                p += 2;
-            }
-
-            *q = '\0';
-            mylen -= cfg->slen * 2;
-
-            // Compression
-            if (mylen < 1) { // compression data length
-                return -9;
-            }
-
-            int clen = *p++;
-            mylen--;
-
-            if (mylen < (size_t)clen) { // compression data
-                return -10;
-            }
-
-            cfg->compression_len = clen;
-
-            cfg->compression_methods = cfg->alloc_fn(cfg, (clen * 3) + 1);
-            if (cfg->compression_methods == NULL) {
-                return -11;
-            }
-
-            q = cfg->compression_methods;
-
-            while(clen--) {
-                if (q != cfg->compression_methods) {
-                    *q++ = ',';
-                }
-
-                sslhaf_c2x(*p, q);
-                p++;
-                q += 2;
-            }
-
-            *q = '\0';
-            mylen -= cfg->compression_len;
-
-            if (mylen == 0) {
-                // It's OK if there is no more data; that means
-                // we're seeing a handshake without any extensions
-                return 1;
-            }
-
-            // Extensions
-            if (mylen < 2) { // extensions length
-                return -12;
-            }
-
-            int elen = (*p * 256) + *(p + 1);
-
-            mylen -= 2;
-            p += 2;
-
-            if (mylen < (size_t)elen) { // extension data
-                return -13;
-            }
-
-            cfg->extensions_len = 0;
-            cfg->extensions = cfg->alloc_fn(cfg, (elen * 5) + 1);
-            if (cfg->extensions == NULL) {
-                return -14;
-            }
-
-            q = cfg->extensions;
-
-            while(elen > 0) {
-                cfg->extensions_len++;
-
-                if (q != cfg->extensions) {
-                    *q++ = ',';
-                }
-
-                // extension type, byte 1
-                sslhaf_c2x(*p, q);
-                p++;
-                elen--;
-                q += 2;
-
-                // extension type, byte 2
-                sslhaf_c2x(*p, q);
-                p++;
-                elen--;
-                q += 2;
-
-                // extension length
-                int ext1len = (*p * 256) + *(p + 1);
-                p += 2;
-                elen -= 2;
-
-                // skip over extension data
-                p += ext1len;
-                elen -= ext1len;
-            }
-
-            *q = '\0';
+        if (mylen < 34) { // for the version number and random value
+            return -3;
         }
+
+        p += 2; // version number
+        p += 32; // random value
+        mylen -= 34;
+
+        if (mylen < 1) { // for the ID length byte
+            return -4;
+        }
+
+        idlen = *p;
+        p += 1; // ID len
+        mylen -= 1;
+
+        if (mylen < (size_t)idlen) { // for the ID
+            return -5;
+        }
+
+        p += idlen; // ID
+        mylen -= idlen;
+
+        if (mylen < 2) { // for the CS length bytes
+            return -6;
+        }
+
+        cslen = (*p * 256) + *(p + 1);
+        cslen = cslen / 2; // each suite consumes 2 bytes
+
+        p += 2; // Cipher Suites len
+        mylen -= 2;
+
+        if (mylen < (size_t)cslen * 2) { // for the suites
+            return -7;
+        }
+
+        // Keep the pointer to where the suites begin. The memory
+        // was allocated from the connection pool, so it should
+        // be around for as long as we need it.
+        cfg->slen = cslen;
+        cfg->suites = (const char *)p;
+
+        cfg->thandshake = cfg->snprintf_fn(cfg,
+            NULL, 0, "%d", cfg->hello_version);
+        cfg->tprotocol = cfg->snprintf_fn(cfg,
+            NULL, 0, "%d.%d", cfg->protocol_high, cfg->protocol_low);
+
+        // Create a list of suites as text, for logging
+        cfg->tsuites = cfg->alloc_fn(cfg, (cslen * 7) + 1);
+        if (cfg->tsuites == NULL) {
+            return -8;
+        }
+
+        q = cfg->tsuites;
+
+        // Extract cipher suites; each suite consists of 2 bytes
+        while(cslen--) {
+            if (q != cfg->tsuites) {
+                *q++ = ',';
+            }
+
+            if (*p != 0) {
+                sslhaf_c2x(*p, q);
+                q += 2;
+            }
+
+            sslhaf_c2x(*(p + 1), q);
+            q += 2;
+
+            p += 2;
+        }
+
+        *q = '\0';
+        mylen -= cfg->slen * 2;
+
+        // Compression
+        if (mylen < 1) { // compression data length
+            return -9;
+        }
+
+        int clen = *p++;
+        mylen--;
+
+        if (mylen < (size_t)clen) { // compression data
+            return -10;
+        }
+
+        cfg->compression_len = clen;
+
+        cfg->compression_methods = cfg->alloc_fn(cfg, (clen * 3) + 1);
+        if (cfg->compression_methods == NULL) {
+            return -11;
+        }
+
+        q = cfg->compression_methods;
+
+        while(clen--) {
+            if (q != cfg->compression_methods) {
+                *q++ = ',';
+            }
+
+            sslhaf_c2x(*p, q);
+            p++;
+            q += 2;
+        }
+
+        *q = '\0';
+        mylen -= cfg->compression_len;
+
+        if (mylen == 0) {
+            // It's OK if there is no more data; that means
+            // we're seeing a handshake without any extensions
+            return 1;
+        }
+
+        // Extensions
+        if (mylen < 2) { // extensions length
+            return -12;
+        }
+
+        int elen = (*p * 256) + *(p + 1);
+
+        mylen -= 2;
+        p += 2;
+
+        if (mylen < (size_t)elen) { // extension data
+            return -13;
+        }
+
+        cfg->extensions_len = 0;
+        cfg->extensions = cfg->alloc_fn(cfg, (elen * 5) + 1);
+        if (cfg->extensions == NULL) {
+            return -14;
+        }
+
+        q = cfg->extensions;
+
+        while(elen > 0) {
+            cfg->extensions_len++;
+
+            if (q != cfg->extensions) {
+                *q++ = ',';
+            }
+
+            // extension type, byte 1
+            sslhaf_c2x(*p, q);
+            p++;
+            elen--;
+            q += 2;
+
+            // extension type, byte 2
+            sslhaf_c2x(*p, q);
+            p++;
+            elen--;
+            q += 2;
+
+            // extension length
+            int ext1len = (*p * 256) + *(p + 1);
+            p += 2;
+            elen -= 2;
+
+            // skip over extension data
+            p += ext1len;
+            elen -= ext1len;
+        }
+
+        *q = '\0';
 
         // Skip over the message
         len -= 4;
