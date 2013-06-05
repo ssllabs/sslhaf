@@ -39,6 +39,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "sslhaf.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 
@@ -133,12 +134,12 @@ void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg) {
     cfg->suites = NULL;
 
     if (cfg->thandshake != NULL) {
-        cfg->free_fn(cfg, cfg->thandshake);
+        free(cfg->thandshake);
         cfg->thandshake = NULL;
     }
 
     if (cfg->tprotocol != NULL) {
-        cfg->free_fn(cfg, cfg->tprotocol);
+        free(cfg->tprotocol);
         cfg->tprotocol = NULL;
     }
 
@@ -147,14 +148,14 @@ void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg) {
         cfg->tsuites = NULL;
     }
 
-    if (cfg->compression_methods != NULL) {
-        cfg->free_fn(cfg, cfg->compression_methods);
-        cfg->compression_methods = NULL;
+    if (cfg->tcompmethods != NULL) {
+        cfg->free_fn(cfg, cfg->tcompmethods);
+        cfg->tcompmethods = NULL;
     }
 
-    if (cfg->extensions != NULL) {
-        cfg->free_fn(cfg, cfg->extensions);
-        cfg->extensions = NULL;
+    if (cfg->textensions != NULL) {
+        cfg->free_fn(cfg, cfg->textensions);
+        cfg->textensions = NULL;
     }
 
     cfg->user_data = NULL;
@@ -186,7 +187,7 @@ static char *sslhaf_c2x(unsigned char what, char *where) {
 static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
     unsigned char *buf = cfg->buf;
     size_t len = cfg->buf_len;
-    int cslen;
+    int section_to_go;
     char *q;
 
     // There are 6 bytes before the list of cipher suites:
@@ -197,24 +198,24 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
     }
 
     // How many bytes do the cipher suites consume?
-    cslen = (buf[0] * 256) + buf[1];
+    section_to_go = (buf[0] * 256) + buf[1];
 
     // Skip over to the list.
     buf += 6;
     len -= 6;
 
     // Check that we have the suites in the buffer.
-    if (len < (size_t)cslen) {
+    if (len < (size_t)section_to_go) {
         return -2;
     }
 
     // In SSLv2 each suite consumes 3 bytes.
-    cslen = cslen / 3;
+    section_to_go = section_to_go / 3;
 
     // Keep the pointer to where the suites begin. The memory
     // was allocated by the caller, so it should be around for as
     // long as we need it.
-    cfg->slen = cslen;
+    cfg->suites_len = section_to_go;
     cfg->suites = (const char *)buf;
 
     cfg->thandshake = cfg->snprintf_fn(cfg,
@@ -227,7 +228,7 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
     // an additional byte for a comma. We need 9 bytes at the
     // beginning (handshake and version), as well as a byte for
     // the terminating NUL byte.
-    cfg->tsuites = cfg->alloc_fn(cfg, (cslen * 7) + 1);
+    cfg->tsuites = cfg->alloc_fn(cfg, (section_to_go * 7) + 1);
     if (cfg->tsuites == NULL) {
         return -3;
     }
@@ -235,25 +236,23 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
     q = cfg->tsuites;
 
     // Extract cipher suites; each suite consists of 3 bytes.
-    while(cslen--) {
+    while(section_to_go--) {
         if (q != cfg->tsuites) {
             *q++ = ',';
         }
 
-        if (*buf != 0) {
-            sslhaf_c2x(*buf, q);
+        if (buf[0] != 0) {
+            sslhaf_c2x(buf[0], q);
             q += 2;
 
-            sslhaf_c2x(*(buf + 1), q);
+            sslhaf_c2x(buf[1], q);
             q += 2;
-        } else {
-            if (*(buf + 1) != 0) {
-                sslhaf_c2x(*(buf + 1), q);
-                q += 2;
-            }
+        } else if (buf[1] != 0) {
+            sslhaf_c2x(buf[1], q);
+            q += 2;
         }
 
-        sslhaf_c2x(*(buf + 2), q);
+        sslhaf_c2x(buf[2], q);
         q += 2;
 
         buf += 3;
@@ -269,115 +268,113 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
  */
 static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
     unsigned char *buf = cfg->buf;
-    size_t len = cfg->buf_len;
+    size_t buf_len = cfg->buf_len;
 
     #ifdef SSLHAF_ENABLE_DEBUG
     if (cfg->log_fn != NULL)
         cfg->log_fn(cfg,
             "sslhaf_decode_packet_v3_handshake (len %" SSLHAF_SIZE_T_FMT ")",
-                len);
+                buf_len);
     #endif
 
     // Loop while there's data in buffer
-    while(len > 0) {
-        size_t ml;
-        int mt;
+    while (buf_len > 0) {
+        size_t msg_len;
+        uint8_t msg_type;
+
         unsigned char *p = buf + 4; // skip over the message type and length
         char *q;
-        size_t mylen;
-        int idlen;
-        int cslen;
+
+        size_t msg_to_go;
+        size_t section_to_go, sub_section_to_go;
 
         #ifdef SSLHAF_ENABLE_DEBUG
         if (cfg->log_fn != NULL)
             cfg->log_fn(cfg,
                 "sslhaf_decode_packet_v3_handshake loop (len %" SSLHAF_SIZE_T_FMT,
-                    len);
+                    buf_len);
         #endif
 
         // Check for size first
-        if (len < 4) {
+        if (buf_len < 4) {
             if (cfg->log_fn != NULL)
                 cfg->log_fn(cfg,
                     "Decoding packet v3 HANDSHAKE: Packet too small %" SSLHAF_SIZE_T_FMT,
-                        len);
+                        buf_len);
 
             return -1;
         }
 
         // Message type
-        mt = buf[0];
+        msg_type = buf[0];
 
         // Message length
-        ml = (buf[1] * 65536) + (buf[2] * 256) + buf[3];
+        msg_len = (buf[1] * 65536) + (buf[2] * 256) + buf[3];
 
         #ifdef SSLHAF_ENABLE_DEBUG
         if (cfg->log_fn != NULL)
             cfg->log_fn(cfg,
                 "sslhaf_decode_packet_v3_handshake mt %d %" SSLHAF_SIZE_T_FMT,
-                    mt, ml);
+                    msg_type, msg_len);
         #endif
 
         // Is this a Client Hello message?
-        if (mt != 1) {
+        if (msg_type != 1) {
             return 1;
         }
 
         // Does the message length correspond
         // to the size of our buffer?
-        if (ml > len - 4) {
+        if (msg_len > buf_len - 4) {
             if (cfg->log_fn != NULL)
                 cfg->log_fn(cfg,
                     "Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
                     SSLHAF_SIZE_T_FMT " got %" SSLHAF_SIZE_T_FMT,
-                        ml, len - 4);
+                        msg_len, buf_len - 4);
 
             return -2;
         }
 
-        mylen = ml;
+        msg_to_go = msg_len;
 
-        if (mylen < 34) { // for the version number and random value
+        if (msg_to_go < 34) { // for the version number and random value
             return -3;
         }
 
         p += 2; // version number
         p += 32; // random value
-        mylen -= 34;
+        msg_to_go -= 34;
 
-        if (mylen < 1) { // for the ID length byte
+        if (msg_to_go < 1) { // for the ID length byte
             return -4;
         }
 
-        idlen = *p;
-        p += 1; // ID len
-        mylen -= 1;
+        section_to_go = p[0];
 
-        if (mylen < (size_t)idlen) { // for the ID
+        p += 1; // ID len
+        msg_to_go -= 1;
+
+        if (msg_to_go < section_to_go) { // for the ID
             return -5;
         }
 
-        p += idlen; // ID
-        mylen -= idlen;
+        p += section_to_go; // ID
+        msg_to_go -= section_to_go;
 
-        if (mylen < 2) { // for the CS length bytes
+        if (msg_to_go < 2) { // for the CS length bytes
             return -6;
         }
 
-        cslen = (*p * 256) + *(p + 1);
-        cslen = cslen / 2; // each suite consumes 2 bytes
+        section_to_go = (p[0] * 256) + p[1];
 
         p += 2; // Cipher Suites len
-        mylen -= 2;
+        msg_to_go -= 2;
 
-        if (mylen < (size_t)cslen * 2) { // for the suites
+        if (msg_to_go < section_to_go) { // for the suites
             return -7;
         }
 
-        // Keep the pointer to where the suites begin. The memory
-        // was allocated from the connection pool, so it should
-        // be around for as long as we need it.
-        cfg->slen = cslen;
+        cfg->suites_len = section_to_go / 2; // 2 bytes per suite id
         cfg->suites = (const char *)p;
 
         cfg->thandshake = cfg->snprintf_fn(cfg,
@@ -386,7 +383,7 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
             NULL, 0, "%d.%d", cfg->protocol_high, cfg->protocol_low);
 
         // Create a list of suites as text, for logging
-        cfg->tsuites = cfg->alloc_fn(cfg, (cslen * 7) + 1);
+        cfg->tsuites = cfg->alloc_fn(cfg, (section_to_go * 7));
         if (cfg->tsuites == NULL) {
             return -8;
         }
@@ -394,123 +391,138 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
         q = cfg->tsuites;
 
         // Extract cipher suites; each suite consists of 2 bytes
-        while(cslen--) {
+        while (section_to_go) {
             if (q != cfg->tsuites) {
                 *q++ = ',';
             }
 
-            if (*p != 0) {
-                sslhaf_c2x(*p, q);
+            if (p[0] != 0) {
+                sslhaf_c2x(p[0], q);
                 q += 2;
             }
 
-            sslhaf_c2x(*(p + 1), q);
+            sslhaf_c2x(p[1], q);
             q += 2;
 
             p += 2;
+            msg_to_go -= 2;
+            section_to_go -= 2;
         }
 
-        *q = '\0';
-        mylen -= cfg->slen * 2;
+        q[0] = '\0';
 
         // Compression
-        if (mylen < 1) { // compression data length
+        if (msg_to_go < 1) { // compression data length
             return -9;
         }
 
-        int clen = *p++;
-        mylen--;
+        section_to_go = p[0];
 
-        if (mylen < (size_t)clen) { // compression data
+        p++;
+        msg_to_go--;
+
+        if (msg_to_go < section_to_go) { // compression data
             return -10;
         }
 
-        cfg->compression_len = clen;
+        cfg->compression_len = section_to_go / 1; // 1 byte per compression alg id
 
-        cfg->compression_methods = cfg->alloc_fn(cfg, (clen * 3) + 1);
-        if (cfg->compression_methods == NULL) {
+        cfg->tcompmethods = cfg->alloc_fn(cfg, (section_to_go * 3));
+        if (cfg->tcompmethods == NULL) {
             return -11;
         }
 
-        q = cfg->compression_methods;
+        q = cfg->tcompmethods;
 
-        while(clen--) {
-            if (q != cfg->compression_methods) {
+        while (section_to_go > 0) {
+            if (q != cfg->tcompmethods) {
                 *q++ = ',';
             }
 
-            sslhaf_c2x(*p, q);
-            p++;
+            sslhaf_c2x(p[0], q);
             q += 2;
+
+            p++;
+            msg_to_go--;
+            section_to_go--;
         }
 
-        *q = '\0';
-        mylen -= cfg->compression_len;
+        q[0] = '\0';
 
-        if (mylen == 0) {
+        if (msg_to_go == 0) {
             // It's OK if there is no more data; that means
             // we're seeing a handshake without any extensions
             return 1;
         }
 
         // Extensions
-        if (mylen < 2) { // extensions length
+        if (msg_to_go < 2) { // extensions length
             return -12;
         }
 
-        int elen = (*p * 256) + *(p + 1);
+        section_to_go = (p[0] * 256) + p[1];
 
-        mylen -= 2;
         p += 2;
+        msg_to_go -= 2;
 
-        if (mylen < (size_t)elen) { // extension data
+        if (msg_to_go < (size_t)section_to_go) { // extension data
             return -13;
         }
 
         cfg->extensions_len = 0;
-        cfg->extensions = cfg->alloc_fn(cfg, (elen * 5) + 1);
-        if (cfg->extensions == NULL) {
+        cfg->textensions = cfg->alloc_fn(cfg, (section_to_go * 5) + 1);
+        if (cfg->textensions == NULL) {
             return -14;
         }
 
-        q = cfg->extensions;
+        q = cfg->textensions;
 
-        while(elen > 0) {
+        while (section_to_go > 0) {
             cfg->extensions_len++;
 
-            if (q != cfg->extensions) {
+            if (q != cfg->textensions) {
                 *q++ = ',';
             }
 
             // extension type, byte 1
-            sslhaf_c2x(*p, q);
-            p++;
-            elen--;
+            sslhaf_c2x(p[0], q);
             q += 2;
+
+            p++;
+            msg_to_go--;
+            section_to_go--;
 
             // extension type, byte 2
-            sslhaf_c2x(*p, q);
-            p++;
-            elen--;
+            sslhaf_c2x(p[0], q);
             q += 2;
 
+            p++;
+            msg_to_go--;
+            section_to_go--;
+
             // extension length
-            int ext1len = (*p * 256) + *(p + 1);
+            sub_section_to_go = (p[0] * 256) + p[1];
+            if (section_to_go < sub_section_to_go) {
+                return -15;
+            }
+
             p += 2;
-            elen -= 2;
+            msg_to_go -= 2;
+            section_to_go -= 2;
 
             // skip over extension data
-            p += ext1len;
-            elen -= ext1len;
+            p += sub_section_to_go;
+            msg_to_go -= sub_section_to_go;
+            section_to_go -= sub_section_to_go;
         }
 
-        *q = '\0';
+        q[0] = '\0';
 
         // Skip over the message
-        len -= 4;
-        len -= ml;
+        buf_len -= 4;
+        buf_len -= msg_len;
         buf += 4;
-        buf += ml;
+        buf += msg_len;
     }
 
     return 1;

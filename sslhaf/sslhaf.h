@@ -104,7 +104,7 @@ struct sslhaf_cfg_t {
     unsigned int protocol_low;
 
     /* How many suites are there? */
-    unsigned int slen;
+    unsigned int suites_len;
 
     /* Pointer to the first suite. Do note that a v3 suites consumes
      * 2 bytes whereas a v2 suite consumes 3 bytes. You need to check
@@ -112,14 +112,26 @@ struct sslhaf_cfg_t {
      */
     const char *suites;
 
-    /* Handkshake version as string. */
+    /* How many compression methods are there. */
+    int compression_len;
+
+    /* How many extensions were there in the handshake? */
+    int extensions_len;
+
+    /* Handshake version as string. */
     char *thandshake;
 
     /* Protocol version number as string. */
     char *tprotocol;
 
-    /* Suites as text. */
+    /* A string of a comma separated list of cipher suites seen in the handshake. */
     char *tsuites;
+
+    /* A string of a comma separated list of compression methods seen in the handshake. */
+    char *tcompmethods;
+
+    /* A string of a comma separated list of all extensions seen in the handshake. */
+    char *textensions;
 
     /* How many requests were there on this connection? */
     unsigned int request_counter;
@@ -136,31 +148,19 @@ struct sslhaf_cfg_t {
     /* Indicates the connection has switched to encrypted handshake messages. */
     int seen_cipher_change;
 
-    /* How many compression methods are there. */
-    int compression_len;
-
-    /* List of all compression methods as a comma-separated string. */
-    char *compression_methods;
-
-    /* How many extensions were there in the handshake? */
-    int extensions_len;
-
-    /* A string that contains the list of all extensions seen in the handshake. */
-    char *extensions;
-
     /* User data */
     void *user_data;
 
-    /* A pointer to the controlled memory alloc function */
+    /* A pointer to the controlled memory alloc function. */
     void* (*alloc_fn)(struct sslhaf_cfg_t *cfg, size_t size);
-    /* A pointer to the controlled memory free function */
+    /* A pointer to the controlled memory free function. */
     void (*free_fn)(struct sslhaf_cfg_t *cfg, void* obj);
     /* A pointer to a limited stream printf style function.
      * If buf is NULL, len is to be ignored and the return buffer should be
-     * dynamically allocated */
+     * dynamically allocated. */
     char* (*snprintf_fn)(struct sslhaf_cfg_t *cfg,
                          char *buf, size_t len, const char *format, ...);
-    /* A pointer to an error logging printf style function */
+    /* A pointer to an error logging printf style function. */
     void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...);
 };
 
