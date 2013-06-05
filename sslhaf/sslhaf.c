@@ -40,8 +40,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "sslhaf.h"
 
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
 
 
 
@@ -93,13 +95,73 @@ static char *mod_sslhaf_generate_sha1(apr_pool_t *pool, char *data, int len) {
 
 
 
+/*
+ * Default pluggable functions.
+ */
+static void* sslhaf_default_alloc_fn(sslhaf_cfg_t *cfg, size_t size) {
+  return malloc(size);
+  }
+
+static void sslhaf_default_free_fn(sslhaf_cfg_t *cfg, void* obj) {
+  free(obj);
+  }
+
+static char* sslhaf_default_snprintf_fn(sslhaf_cfg_t *cfg,
+    char *buf, size_t len, const char *format, ...) {
+  va_list ap;
+  va_start(ap, format);
+
+  if (buf != NULL)
+    {
+    vsnprintf(buf, len, format, ap);
+    }
+  else
+    {
+    int ret = vasprintf(&buf, format, ap);
+    (void)ret;
+    }
+
+  va_end(ap);
+
+  return buf;
+  }
+
+static void sslhaf_default_log_fn(sslhaf_cfg_t *cfg, const char *format, ...) {
+  va_list ap;
+  va_start(ap, format);
+
+  vprintf(format, ap);
+
+  va_end(ap);
+  }
+
+
+
+sslhaf_cfg_t *sslhaf_cfg_create_default(void) {
+    return sslhaf_cfg_create(NULL,
+        &sslhaf_default_alloc_fn,
+        &sslhaf_default_free_fn,
+        &sslhaf_default_snprintf_fn,
+        &sslhaf_default_free_fn,
+        NULL);
+}
+
+sslhaf_cfg_t *sslhaf_cfg_create_verbose(void) {
+    return sslhaf_cfg_create(NULL,
+        &sslhaf_default_alloc_fn,
+        &sslhaf_default_free_fn,
+        &sslhaf_default_snprintf_fn,
+        &sslhaf_default_free_fn,
+        &sslhaf_default_log_fn);
+}
 
 sslhaf_cfg_t *sslhaf_cfg_create(
         void *user_data,
         void* (*alloc_fn)(struct sslhaf_cfg_t *cfg, size_t size),
-        void (*free_fn)(struct sslhaf_cfg_t *cfg, void* obj),
+        void (*free_fn)(struct sslhaf_cfg_t *cfg, void *obj),
         char* (*snprintf_fn)(struct sslhaf_cfg_t *cfg,
                 char *inputbuf, size_t len, const char *format, ...),
+        void (*free_snprintf_fn)(struct sslhaf_cfg_t *cfg, void *buf),
         void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...)) {
     sslhaf_cfg_t *cfg;
     sslhaf_cfg_t temp_cfg;
@@ -116,6 +178,7 @@ sslhaf_cfg_t *sslhaf_cfg_create(
     cfg->alloc_fn = alloc_fn;
     cfg->free_fn = free_fn;
     cfg->snprintf_fn = snprintf_fn;
+    cfg->free_snprintf_fn = free_snprintf_fn;
     cfg->log_fn = log_fn;
 
     return cfg;

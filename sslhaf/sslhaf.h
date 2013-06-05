@@ -154,12 +154,15 @@ struct sslhaf_cfg_t {
     /* A pointer to the controlled memory alloc function. */
     void* (*alloc_fn)(struct sslhaf_cfg_t *cfg, size_t size);
     /* A pointer to the controlled memory free function. */
-    void (*free_fn)(struct sslhaf_cfg_t *cfg, void* obj);
+    void (*free_fn)(struct sslhaf_cfg_t *cfg, void *obj);
     /* A pointer to a limited stream printf style function.
      * If buf is NULL, len is to be ignored and the return buffer should be
      * dynamically allocated. */
     char* (*snprintf_fn)(struct sslhaf_cfg_t *cfg,
                          char *buf, size_t len, const char *format, ...);
+    /* A pointer to a memory free function for snprintf allocated buffers.
+     * Author may simply use free_fn here as well. */
+    void (*free_snprintf_fn)(struct sslhaf_cfg_t *cfg, void *buf);
     /* A pointer to an error logging printf style function. */
     void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...);
 };
@@ -169,14 +172,35 @@ typedef struct sslhaf_cfg_t sslhaf_cfg_t;
 
 
 /**
+ * Create and initialise a sslhaf_cfg object using a default function set:
+ *   alloc/free_fn: uses malloc(3) and free(3)
+ *   snprintf_fn: uses vsnprintf(3) or vasprintf(3)
+ *   free_snprintf_fn: uses free(3)
+ *   log_fn: is NULL
+ * User data will be NULL.
+ */
+sslhaf_cfg_t *sslhaf_cfg_create_default(void);
+
+/**
+ * Create and initialise a sslhaf_cfg object using a default function set:
+ *   alloc/free_fn: uses malloc(3) and free(3)
+ *   snprintf_fn: uses vsnprintf(3) or vasprintf(3)
+ *   free_snprintf_fn: uses free(3)
+ *   log_fn: uses vprintf(3)
+ * User data will be NULL.
+ */
+sslhaf_cfg_t *sslhaf_cfg_create_verbose(void);
+
+/**
  * Create and initialise a sslhaf_cfg object
  */
 sslhaf_cfg_t *sslhaf_cfg_create(
     void *user_data,
     void* (*alloc_fn)(struct sslhaf_cfg_t *cfg, size_t size),
-    void (*free_fn)(struct sslhaf_cfg_t *cfg, void* obj),
+    void (*free_fn)(struct sslhaf_cfg_t *cfg, void *obj),
     char* (*snprintf_fn)(struct sslhaf_cfg_t *cfg,
             char *msgbuf, size_t len, const char *format, ...),
+    void (*free_snprintf_fn)(struct sslhaf_cfg_t *cfg, void *buf),
     void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...));
 
 /**
