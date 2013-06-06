@@ -62,6 +62,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef SSLHAF_H
 #define SSLHAF_H
 
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -69,6 +70,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 
 #define SSLHAF_STATE_START 0
@@ -82,41 +84,131 @@ extern "C" {
 #define SSLHAF_PROTOCOL_HANDSHAKE 22
 #define SSLHAF_PROTOCOL_APPLICATION 23
 
+/**
+ * The ids of TLS compression methods.
+ */
+#define SSLHAF_COMPRESSION_METHOD_NULL 0
+#define SSLHAF_COMPRESSION_METHOD_DEFLATE 1
+#define SSLHAF_COMPRESSION_METHOD_LZS 64
+
+/**
+ * The types and names used for TLS extensions.
+ */
+#define SSLHAF_EXTENSION_SNI_TYPE 0x0000
+#define SSLHAF_EXTENSION_SNI_NAME "server_name"
+
+#define SSLHAF_EXTENSION_UNSUPPORTED_NAME "sslhaf unsupported"
+
+/**
+ * Return codes used by sslhaf functions.
+ */
+#define SSLHAF_OK 1
+#define SSLHAF_AGAIN -11
+#define SSLHAF_NOMEM -12
+#define SSLHAF_INVAL -22
+
+/**
+ * Helper function to set and return an error code.
+ */
+#define SSLHAF_RETURN_ERROR(cfg, err) \
+    (cfg)->last_error_code = (err); \
+    (cfg)->last_error_line = __LINE__; \
+    return (err);
 
 
+
+/**
+ * Holds information about a TLS cipher suite.
+ */
+struct sslhaf_suite_t {
+    const char *label;
+    uint32_t id;
+    uint16_t key_len;
+};
+
+typedef struct sslhaf_suite_t sslhaf_suite_t;
+
+
+
+/**
+ * Holds information about TLS compression methods.
+ */
+struct sslhaf_compression_method_t {
+    uint8_t method;
+};
+
+typedef struct sslhaf_compression_method_t sslhaf_compression_method_t;
+
+
+
+/**
+ * Holds information about various supported TLS extensions.
+ */
+struct sslhaf_extension_sni_t {
+    uint8_t type;
+
+    /* Number of server names listed. */
+    uint16_t server_names_len;
+
+    /* Server names listed */
+    char **server_names;
+};
+
+typedef struct sslhaf_extension_sni_t sslhaf_extension_sni_t;
+
+
+struct sslhaf_extension_t {
+    const char *name;
+    uint16_t type;
+
+    union {
+        struct sslhaf_extension_sni_t sni;
+    } detail;
+};
+
+typedef struct sslhaf_extension_t sslhaf_extension_t;
+
+
+
+/**
+ * The structure that maintains user preferences, parsing state and parsed data
+ */
 struct sslhaf_cfg_t {
     /* Inspection state; see above for the constants. */
     int state;
 
-    /* The buffer we use to store the first SSL packet.
-     * Allocated from the connection pool.
-     */
+    /* The TLS protocol of the transaction under scrutiny. */
     int buf_protocol;
+
+    /* The buffer we use to store the first SSL packet. */
     unsigned char *buf;
     size_t buf_len;
     size_t buf_to_go;
 
     /* The client hello version used; 2 or 3. */
-    unsigned int hello_version;
+    uint8_t hello_version;
 
     /* SSL version indicated in the handshake. */
-    unsigned int protocol_high;
-    unsigned int protocol_low;
+    uint8_t protocol_high;
+    uint8_t protocol_low;
 
     /* How many suites are there? */
-    unsigned int suites_len;
+    uint16_t suites_len;
 
-    /* Pointer to the first suite. Do note that a v3 suites consumes
-     * 2 bytes whereas a v2 suite consumes 3 bytes. You need to check
-     * hello_version before you access the suites.
-     */
-    const char *suites;
+    /* A list of details of all suites seen in the handshake. */
+    const sslhaf_suite_t **suites;
 
     /* How many compression methods are there. */
-    int compression_len;
+    uint8_t compression_len;
+
+    /* A list of details of all compression methods seen in the handshake. */
+    sslhaf_compression_method_t **compression_methods;
 
     /* How many extensions were there in the handshake? */
-    int extensions_len;
+    uint16_t extensions_len;
+
+    /* A list of details of all extensions seen in the handshake. */
+    sslhaf_extension_t **extensions;
 
     /* Handshake version as string. */
     char *thandshake;
@@ -134,19 +226,23 @@ struct sslhaf_cfg_t {
     char *textensions;
 
     /* How many requests were there on this connection? */
-    unsigned int request_counter;
+    size_t request_counter;
 
     /* How many output buckets seen on a connection */
-    int out_bucket_count;
-
-    /* How many input data fragments seen before first output data fragment. */
-    int in_data_fragments;
+    size_t out_bucket_count;
 
     /* How many output buckets sent before first input data fragment. */
-    int in_data_fragment_out_buckets;
+    size_t in_data_fragment_out_buckets;
+
+    /* How many input data fragments seen before first output data fragment. */
+    size_t in_data_fragments;
 
     /* Indicates the connection has switched to encrypted handshake messages. */
-    int seen_cipher_change;
+    bool seen_cipher_change;
+
+    /* Last error information. Useful for debugging. */
+    int last_error_code;
+    size_t last_error_line;
 
     /* User data */
     void *user_data;
@@ -215,6 +311,15 @@ void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg);
 int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
     const unsigned char *inputbuf, size_t inputlen);
 
+/**
+ * Resolve a cipher id into an SSLv2 or TLS cipher suite description.
+ */
+const sslhaf_suite_t *sslhaf_get_suite(uint32_t id);
+
+/**
+ * Resolve a TLS extension id into a sslhaf extension type.
+ */
+const char *sslhaf_get_extension_name(uint16_t type);
 
 #ifdef __cplusplus
 }; // extern "C"
