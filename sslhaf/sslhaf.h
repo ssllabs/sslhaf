@@ -182,8 +182,15 @@ struct sslhaf_cfg_t {
 
     /* The buffer we use to store the first SSL packet. */
     unsigned char *buf;
+    size_t buf_off;
     size_t buf_len;
     size_t buf_to_go;
+
+    /* The amount of input data used during one call to decode_buffer. */
+    size_t input_used_session;
+
+    /* The amount of data used in total. */
+    size_t input_used_total;
 
     /* The client hello version used; 2 or 3. */
     uint8_t hello_version;

@@ -314,16 +314,14 @@ const char *sslhaf_get_extension_name(uint16_t type) {
  * Decode SSLv2 packet.
  */
 static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
-    unsigned char *buf = cfg->buf;
     char *q;
-    size_t buf_len = cfg->buf_len;
     uint16_t section_to_go;
     uint16_t obj_count;
 
     // There are 6 bytes before the list of cipher suites:
     // cipher suite length (2 bytes), session ID length (2 bytes)
     // and challenge length (2 bytes).
-    if (buf_len < 6) {
+    if (cfg->buf_len < 6) {
         SSLHAF_RETURN_ERROR(cfg, SSLHAF_AGAIN);
     }
 
@@ -340,14 +338,20 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
     }
 
     // How many bytes do the cipher suites consume?
-    section_to_go = (buf[0] * 256) + buf[1];
+    section_to_go =
+        (cfg->buf[cfg->buf_off] * 256) +
+        cfg->buf[cfg->buf_off + 1];
 
     // Skip over to the list.
-    buf += 6;
-    buf_len -= 6;
+    cfg->buf_off += 6;
+    cfg->buf_len -= 6;
+    cfg->buf_to_go -= 6;
+
+    cfg->input_used_session += 6;
+    cfg->input_used_total += 6;
 
     // Check that we have the suites in the buffer.
-    if (buf_len < section_to_go) {
+    if (cfg->buf_len < section_to_go) {
         SSLHAF_RETURN_ERROR(cfg, SSLHAF_AGAIN);
     }
 
@@ -377,28 +381,40 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
             *q++ = ',';
         }
 
-        if (buf[0] != 0) {
-            sslhaf_c2x(buf[0], q);
+        if (cfg->buf[cfg->buf_off] != 0) {
+            sslhaf_c2x(cfg->buf[cfg->buf_off], q);
             q += 2;
 
-            sslhaf_c2x(buf[1], q);
+            sslhaf_c2x(cfg->buf[cfg->buf_off + 1], q);
             q += 2;
-        } else if (buf[1] != 0) {
-            sslhaf_c2x(buf[1], q);
+        } else if (cfg->buf[cfg->buf_off + 1] != 0) {
+            sslhaf_c2x(cfg->buf[cfg->buf_off + 1], q);
             q += 2;
         }
 
-        sslhaf_c2x(buf[2], q);
+        sslhaf_c2x(cfg->buf[cfg->buf_off + 2], q);
         q += 2;
 
         cfg->suites[obj_count] = sslhaf_get_suite(
-            (buf[1] * 65536) + (buf[2] * 256) + buf[3]);
+            (cfg->buf[cfg->buf_off] * 65536) +
+            (cfg->buf[cfg->buf_off + 1] * 256) +
+             cfg->buf[cfg->buf_off + 2]);
 
-        buf += 3;
+        cfg->buf_off += 3;
+        cfg->buf_len -= 3;
+        cfg->buf_to_go -= 3;
+
+        cfg->input_used_session += 3;
+        cfg->input_used_total += 3;
+
         section_to_go -= 3;
     }
 
     *q = '\0';
+
+    if (section_to_go > 0) {
+        SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
+    }
 
     return SSLHAF_OK;
 }
@@ -407,15 +423,12 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
  * Decode SSLv3+ packet containing handshake data.
  */
 static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
-    unsigned char *buf = cfg->buf;
-    size_t buf_len = cfg->buf_len;
-
     // Check for size first
-    if (buf_len == 0) {
+    if (cfg->buf_len == 0) {
         if (cfg->log_fn != NULL)
             cfg->log_fn(cfg,
                 "Decoding packet v3 HANDSHAKE: Packet too small %" SSLHAF_SIZE_T_FMT,
-                    buf_len);
+                    cfg->buf_len);
 
         SSLHAF_RETURN_ERROR(cfg, SSLHAF_AGAIN);
     }
@@ -424,7 +437,7 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
     if (cfg->log_fn != NULL)
         cfg->log_fn(cfg,
             "sslhaf_decode_packet_v3_handshake (len %" SSLHAF_SIZE_T_FMT ")",
-                buf_len);
+                cfg->buf_len);
     #endif
 
     // record packet information as strings
@@ -440,7 +453,7 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
     }
 
     // Loop while there's data in buffer
-    while (buf_len > 0) {
+    while (cfg->buf_len > 0) {
         unsigned char *p, *t;
         char *q;
         size_t msg_len;
@@ -452,24 +465,46 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
         if (cfg->log_fn != NULL)
             cfg->log_fn(cfg,
                 "sslhaf_decode_packet_v3_handshake loop (len %" SSLHAF_SIZE_T_FMT,
-                    buf_len);
+                    cfg->buf_len);
         #endif
 
         // Check for size first
-        if (buf_len < 4) {
+        if (cfg->buf_len < 4) {
             if (cfg->log_fn != NULL)
                 cfg->log_fn(cfg,
                     "Decoding packet v3 HANDSHAKE: Packet too small %" SSLHAF_SIZE_T_FMT,
-                        buf_len);
+                        cfg->buf_len);
 
             SSLHAF_RETURN_ERROR(cfg, SSLHAF_AGAIN);
         }
 
         // Message type
-        msg_type = buf[0];
+        msg_type = cfg->buf[cfg->buf_off + 0];
+
+        // Is this a Client Hello message?
+        if (msg_type != 1) {
+            return SSLHAF_OK;
+        }
 
         // Message length
-        msg_len = (buf[1] * 65536) + (buf[2] * 256) + buf[3];
+        msg_len =
+            (cfg->buf[cfg->buf_off + 1] * 65536) +
+            (cfg->buf[cfg->buf_off + 2] * 256) +
+             cfg->buf[cfg->buf_off + 3];
+
+        p = cfg->buf + cfg->buf_off + 4; // skip over the message type and length
+        msg_to_go = msg_len;
+
+        // Does the message length correspond
+        // to the size of our buffer?
+        if (cfg->buf_len != (msg_len + 4)) {
+            if (cfg->log_fn != NULL)
+                cfg->log_fn(cfg,
+                    "Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
+                    SSLHAF_SIZE_T_FMT " got %" SSLHAF_SIZE_T_FMT,
+                        cfg->buf_len - 4, msg_len);
+            SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
+        }
 
         #ifdef SSLHAF_ENABLE_DEBUG
         if (cfg->log_fn != NULL)
@@ -477,25 +512,6 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
                 "sslhaf_decode_packet_v3_handshake mt %d %" SSLHAF_SIZE_T_FMT,
                     msg_type, msg_len);
         #endif
-
-        // Is this a Client Hello message?
-        if (msg_type != 1) {
-            return SSLHAF_OK;
-        }
-
-        // Does the message length correspond
-        // to the size of our buffer?
-        if (msg_len > buf_len - 4) {
-            if (cfg->log_fn != NULL)
-                cfg->log_fn(cfg,
-                    "Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
-                    SSLHAF_SIZE_T_FMT " got %" SSLHAF_SIZE_T_FMT,
-                        msg_len, buf_len - 4);
-            SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
-        }
-
-        p = buf + 4; // skip over the message type and length
-        msg_to_go = msg_len;
 
         if (msg_to_go < 34) { // for the version number and random value
             SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
@@ -829,10 +845,12 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
         }
 
         // Skip over the message
-        buf_len -= 4;
-        buf_len -= msg_len;
-        buf += 4;
-        buf += msg_len;
+        cfg->buf_off += (4 + msg_len);
+        cfg->buf_len -= (4 + msg_len);
+        cfg->buf_to_go -= (4 + msg_len);
+
+        cfg->input_used_session += (4 + msg_len);
+        cfg->input_used_total += (4 + msg_len);
     }
 
     return 1;
@@ -845,10 +863,8 @@ static int sslhaf_decode_packet_v3(sslhaf_cfg_t *cfg) {
     /* Handshake */
     if (cfg->buf_protocol == SSLHAF_PROTOCOL_HANDSHAKE) {
         if (cfg->seen_cipher_change == 0) {
+            // specifically handle this message in this state
             return sslhaf_decode_packet_v3_handshake(cfg);
-        } else {
-            // Ignore encrypted handshake messages
-            return SSLHAF_OK;
         }
     } else
     /* Application data */
@@ -866,17 +882,22 @@ static int sslhaf_decode_packet_v3(sslhaf_cfg_t *cfg) {
                 cfg->in_data_fragments++;
             }
         }
-
-        return SSLHAF_OK;
     } else
     /* Change cipher spec */
     if (cfg->buf_protocol == SSLHAF_PROTOCOL_CHANGE_CIPHER_SPEC) {
         cfg->seen_cipher_change = 1;
-        return SSLHAF_OK;
-    } else {
-        // Ignore unknown protocols
-        return SSLHAF_OK;
     }
+
+    // consume buffer data up to one message
+    cfg->buf_off += cfg->buf_to_go;
+    cfg->buf_len -= cfg->buf_to_go;
+
+    cfg->input_used_session += cfg->buf_to_go;
+    cfg->input_used_total += cfg->buf_to_go;
+
+    cfg->buf_to_go = 0;
+
+    return SSLHAF_OK;
 }
 
 /**
@@ -886,6 +907,7 @@ static int sslhaf_decode_packet_v3(sslhaf_cfg_t *cfg) {
 int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
         const unsigned char *inputbuf, size_t inputlen)
 {
+    cfg->input_used_session = 0;
     cfg->last_error_code = 0;
     cfg->last_error_line = 0;
 
@@ -901,7 +923,7 @@ int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
     #endif
 
     // Loop while there's input to process
-    while(inputlen > 0) {
+    while (inputlen > 0) {
         #ifdef SSLHAF_ENABLE_DEBUG
         if (cfg->log_fn != NULL)
             cfg->log_fn(cfg,
@@ -968,20 +990,11 @@ int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
                 inputbuf += 2;
                 inputlen -= 2;
 
-                // Allocate a buffer to hold the entire packet
-                cfg->buf = cfg->alloc_fn(cfg, len);
-                if (cfg->buf == NULL) {
-                    if (cfg->log_fn != NULL)
-                        cfg->log_fn(cfg,
-                            "Failed to allocate %" SSLHAF_SIZE_T_FMT " bytes",
-                                len);
-                    SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
-                }
-
                 // Go into buffering mode
                 cfg->state = SSLHAF_STATE_BUFFER;
-                cfg->buf_len = 0;
-                cfg->buf_to_go = len;
+
+                // state the requirement for additional buffered data
+                cfg->buf_to_go += len;
 
                 #ifdef SSLHAF_ENABLE_DEBUG
                 if (cfg->log_fn != NULL)
@@ -1044,20 +1057,19 @@ int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
                 inputbuf += 4;
                 inputlen -= 4;
 
-                // Allocate a buffer to hold the entire packet
-                cfg->buf = cfg->alloc_fn(cfg, len);
-                if (cfg->buf == NULL) {
-                    if (cfg->log_fn != NULL)
-                        cfg->log_fn(cfg,
-                            "Failed to allocate %" SSLHAF_SIZE_T_FMT " bytes",
-                                len);
-                    SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
-                }
-
                 // Go into buffering mode
                 cfg->state = SSLHAF_STATE_BUFFER;
-                cfg->buf_len = 0;
+
+                // state the requirement for additional buffered data
                 cfg->buf_to_go = len;
+
+                #ifdef SSLHAF_ENABLE_DEBUG
+                if (cfg->log_fn != NULL)
+                    cfg->log_fn(cfg,
+                        "decode_bucket; buffering protocol %d high %d low %d len %" SSLHAF_SIZE_T_FMT,
+                            cfg->buf_protocol,
+                            cfg->protocol_high, cfg->protocol_low, len);
+                #endif
             }
             else {
                 // Unknown protocol
@@ -1067,16 +1079,56 @@ int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
 
         // Are we buffering?
         if (cfg->state == SSLHAF_STATE_BUFFER) {
-            // How much data is available?
-            if (cfg->buf_to_go <= inputlen) {
-                int rc;
+            if (inputlen > 0) {
+                // only buffer what is required
+                size_t to_buffer = (cfg->buf_to_go < inputlen) ?
+                    cfg->buf_to_go : inputlen;
 
-                // We have enough data to complete this packet
-                memcpy(cfg->buf + cfg->buf_len, inputbuf, cfg->buf_to_go);
-                cfg->buf_len += cfg->buf_to_go;
-                inputbuf += cfg->buf_to_go;
-                inputlen -= cfg->buf_to_go;
-                cfg->buf_to_go = 0;
+                if (cfg->buf == NULL) {
+                    // allocate buffer space for the first time
+                    cfg->buf = cfg->alloc_fn(cfg, to_buffer);
+                    if (cfg->buf == NULL) {
+                        if (cfg->log_fn != NULL)
+                            cfg->log_fn(cfg,
+                                "Failed to allocate %" SSLHAF_SIZE_T_FMT " bytes",
+                                    to_buffer);
+                        SSLHAF_RETURN_ERROR(cfg, SSLHAF_NOMEM);
+                    }
+                } else {
+                    // allocate additional space to handle the new data
+                    unsigned char *old_buf = cfg->buf;
+
+                    cfg->buf = cfg->alloc_fn(cfg,
+                        cfg->buf_len + to_buffer);
+                    if (cfg->buf == NULL) {
+                        cfg->buf = old_buf;
+                        if (cfg->log_fn != NULL)
+                            cfg->log_fn(cfg,
+                                "Failed to allocate %" SSLHAF_SIZE_T_FMT " bytes",
+                                    to_buffer);
+                        SSLHAF_RETURN_ERROR(cfg, SSLHAF_NOMEM);
+                    }
+
+                    // copy old data into head of new buffer
+                    memcpy(cfg->buf, old_buf + cfg->buf_off, cfg->buf_len);
+
+                    cfg->buf_off = 0;
+                    // buf_len unchanged
+
+                    cfg->free_fn(cfg, old_buf);
+                }
+
+                // place inputbuf into the sslhaf buffer
+                memcpy(cfg->buf + cfg->buf_off + cfg->buf_len, inputbuf, to_buffer);
+                cfg->buf_len += to_buffer;
+
+                inputbuf += to_buffer;
+                inputlen -= to_buffer;
+            }
+
+            // How much data is available?
+            if (cfg->buf_to_go <= cfg->buf_len) {
+                int rc;
 
                 // Decode the packet now
                 if (cfg->hello_version == 3) {
@@ -1085,9 +1137,14 @@ int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
                     rc = sslhaf_decode_packet_v2(cfg);
                 }
 
-                // Free the packet buffer, which we no longer need
-                cfg->free_fn(cfg, cfg->buf);
-                cfg->buf = NULL;
+                // Has all data in the buffer been used up?
+                if (cfg->buf_to_go == 0) {
+                    cfg->free_fn(cfg, cfg->buf);
+                    cfg->buf = NULL;
+                    cfg->buf_off = 0;
+                    cfg->buf_len = 0;
+                    cfg->buf_to_go = 0;
+                }
 
                 if (rc < 0) {
                     if (cfg->log_fn != NULL)
@@ -1099,16 +1156,9 @@ int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
 
                 // Go back to looking at the next packet
                 cfg->state = SSLHAF_STATE_READING;
-
-                return rc;
             } else {
-                // There's not enough data; copy what we can and
-                // we'll get the rest later
-                memcpy(cfg->buf + cfg->buf_len, inputbuf, inputlen);
-                cfg->buf_len += inputlen;
-                cfg->buf_to_go -= inputlen;
-                inputbuf += inputlen;
-                inputlen = 0;
+                // There's not enough data, wait for more
+                SSLHAF_RETURN_ERROR(cfg, SSLHAF_AGAIN);
             }
         }
     }
