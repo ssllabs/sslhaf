@@ -434,9 +434,9 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             q += 2;
             c2x(cfg->protocol_low, q);
             q += 2;
-            c2x((mylen + 5) >> 8, q);
+            c2x((mylen + 4) >> 8, q);
             q += 2;
-            c2x((mylen + 5) & 0xff, q);
+            c2x((mylen + 4) & 0xff, q);
             q += 2;
 
             while(cslen--) {
