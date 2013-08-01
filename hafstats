@@ -11,7 +11,7 @@ $BROWSERS_ONLY = true;
 
 // NOTE: This script is work in progress.
 
-$pattern = "/^([^]]+\]) (\S+) \"(\\d+)\" \"([\\d.]+)\" \"([\\w,]+)\" \"([-0-9,]+)\" \"([01])\" \"(\\d+)\" \"([-0-9a-zA-Z,]+)\" \"(.*)\"$/";
+$pattern = "/^([^]]+\]) (\S+) \"(\\d+)\" \"([\\d.]+)\" \"([\\w,]+)\" \"([-0-9,]+)\" \"([01])\" \"(\\d+)\" \"([-0-9a-zA-Z,]+)\"(?: \"([-0-9a-zA-Z]+)\")? \"(.*)\"$/";
 
 
 // Known TLS extensions
@@ -424,9 +424,14 @@ while($line = fgets($fh)) {
 				array_push($he->extensions, $e);
 			}
 		}
-		 
-		$he->ua = $matches[10];
-		// print_r($he);
+
+		if (isset($matches[11])) {
+			$he->client_hello = $matches[10];
+			$he->ua = $matches[11];
+		} else {
+			$he->client_hello = "-";
+			$he->ua = $matches[10];
+		}
 
 		$tempResults[$he->ip . "_" . $he->ua] = $he;
 	} else {

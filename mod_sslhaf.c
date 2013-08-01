@@ -4,7 +4,7 @@ mod_sslhaf: Apache module for passive SSL client fingerprinting
  
  | THIS PRODUCT IS NOT READY FOR PRODUCTION USE. DEPLOY AT YOUR OWN RISK.
 
-Copyright (c) 2009-2012, Qualys, Inc.
+Copyright (c) 2009-2013, Qualys, Inc.
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -108,6 +108,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *   variable can be used to reduce the amount of logging (SSL parameters will typically not
  *   change across requests on the same connection). Example:
  *
+ * - SSLHAF_RAW contains the entire raw Client Hello, encoded as a hex string. 
+ *
  *   CustomLog logs/sslhaf.log "YOUR_LOG_STRING_HERE" env=SSLHAF_LOG
  *
  */
@@ -202,6 +204,9 @@ struct sslhaf_cfg_t {
 
     /* A string that contains the list of all extensions seen in the handshake. */    
     const char *extensions;
+
+    /* Raw Client Hello bytes, as a string of hexadecimal characters. */    
+    const char *client_hello;
 };
 
 typedef struct sslhaf_cfg_t sslhaf_cfg_t;
@@ -409,11 +414,29 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         
         // Is this a Client Hello message?    
         if (mt == 1) {
-            unsigned char *p = buf + 4; // skip over the message type and length
+            unsigned char *p; 
             unsigned char *q;
             apr_size_t mylen = ml;
             int idlen;
             int cslen;
+                        
+            // make a copy of the entire Client Hello and convert it to hex
+
+            p = buf;            
+            cslen = len;
+            q = apr_pcalloc(f->c->pool, cslen * 2 + 1);
+            cfg->client_hello = (const char *)q;
+
+            while(cslen--) {
+                c2x(*p, q);
+                p++;
+                q += 2;
+            }
+            *q = '\0';
+            
+            // parse Client Hello
+
+            p = buf + 4; // skip over the message type and length
             
             if (mylen < 34) { // for the version number and random value
                 return -3;
@@ -1018,6 +1041,13 @@ static int sslhaf_post_request(request_rec *r) {
         
         apr_table_setn(r->subprocess_env, "SSLHAF_IP_HASH", cfg->ipaddress_hash);
         #endif
+        
+        // Raw Client Hello
+        if (cfg->client_hello != NULL) {
+            apr_table_setn(r->subprocess_env, "SSLHAF_RAW", cfg->client_hello);
+        } else {
+            apr_table_setn(r->subprocess_env, "SSLHAF_RAW", "-");
+        }
     }
     
     return DECLINED;
