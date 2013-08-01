@@ -441,8 +441,14 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             if (mylen < 34) { // for the version number and random value
                 return -3;
             }
+
+            // Use the version number from Client Hello, overriding the
+            // value we got earlier. Some clients will always set the
+            // version number in the Record Layer to TLS 1.0, even if they
+            // support better protocols.            
+            cfg->protocol_high = *p++;
+            cfg->protocol_low = *p++;
             
-            p += 2; // version number
             p += 32; // random value
             mylen -= 34;
             
@@ -697,8 +703,11 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 }
                 
                 cfg->hello_version = 3;
-                cfg->protocol_high = inputbuf[0];
-                cfg->protocol_low = inputbuf[1];
+                // Remember the protocol version used, but only if we don't already have it
+                if (cfg->protocol_high != 0) {
+                    cfg->protocol_high = inputbuf[0];
+                    cfg->protocol_low = inputbuf[1];
+                }
             
                 // Go over the version bytes
                 inputbuf += 2;
