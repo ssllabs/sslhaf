@@ -205,7 +205,8 @@ struct sslhaf_cfg_t {
     /* A string that contains the list of all extensions seen in the handshake. */    
     const char *extensions;
 
-    /* Raw Client Hello bytes, as a string of hexadecimal characters. */    
+    /* The entire raw handshake packet, consisting of a record layer packet with a
+     * Client Hello inside it. Encoded as a string of hexadecimal characters. */    
     const char *client_hello;
 };
 
@@ -424,8 +425,19 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 
             p = buf;            
             cslen = len;
-            q = apr_pcalloc(f->c->pool, cslen * 2 + 1);
+            q = apr_pcalloc(f->c->pool, 10 + cslen * 2 + 1);
             cfg->client_hello = (const char *)q;
+            
+            c2x(0x16, q);
+            q += 2;
+            c2x(cfg->protocol_high, q);
+            q += 2;
+            c2x(cfg->protocol_low, q);
+            q += 2;
+            c2x((mylen + 5) >> 8, q);
+            q += 2;
+            c2x((mylen + 5) & 0xff, q);
+            q += 2;
 
             while(cslen--) {
                 c2x(*p, q);
@@ -704,7 +716,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 
                 cfg->hello_version = 3;
                 // Remember the protocol version used, but only if we don't already have it
-                if (cfg->protocol_high != 0) {
+                if (cfg->protocol_high == 0) {
                     cfg->protocol_high = inputbuf[0];
                     cfg->protocol_low = inputbuf[1];
                 }
