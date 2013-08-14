@@ -138,6 +138,12 @@ module AP_MODULE_DECLARE_DATA sslhaf_module;
 static const char sslhaf_in_filter_name[] = "SSLHAF_IN";
 static const char sslhaf_out_filter_name[] = "SSLHAF_OUT";
 
+#if (AP_SERVER_MAJORVERSION_NUMBER >= 2) && (AP_SERVER_MINORVERSION_NUMBER > 3)
+#define CONN_REMOTE_IP(C) ((C)->client_ip)
+#else
+#define CONN_REMOTE_IP(C) ((C)->remote_ip)
+#endif
+
 struct sslhaf_cfg_t {
     /* Inspection state; see above for the constants. */
     int state;
@@ -364,7 +370,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     #ifdef ENABLE_DEBUG
     ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
         "mod_sslhaf [%s]: decode_packet_v3_handshake (len %" APR_SIZE_T_FMT ")",
-        f->c->remote_ip, len);
+        CONN_REMOTE_IP(f->c), len);
     #endif
         
     // Loop while there's data in buffer
@@ -375,14 +381,14 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         #ifdef ENABLE_DEBUG
         ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
             "mod_sslhaf [%s]: decode_packet_v3_handshake loop (len %" APR_SIZE_T_FMT,
-            f->c->remote_ip, len);
+            CONN_REMOTE_IP(f->c), len);
         #endif
 
         // Check for size first        
         if (len < 4) {
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                 "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Packet too small %" APR_SIZE_T_FMT,
-                f->c->remote_ip, len);
+                CONN_REMOTE_IP(f->c), len);
         
             return -1;
         }
@@ -396,7 +402,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         #ifdef ENABLE_DEBUG
         ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
             "mod_sslhaf [%s]: decode_packet_v3_handshake mt %d %" APR_SIZE_T_FMT,
-            f->c->remote_ip, mt, ml);
+            CONN_REMOTE_IP(f->c), mt, ml);
         #endif
         
         if (mt != 1) {
@@ -408,7 +414,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
         if (ml > len - 4) {
             ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                 "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
-                APR_SIZE_T_FMT " got %" APR_SIZE_T_FMT, f->c->remote_ip, ml, len - 4);
+                APR_SIZE_T_FMT " got %" APR_SIZE_T_FMT, CONN_REMOTE_IP(f->c), ml, len - 4);
         
             return -2;
         }
@@ -671,14 +677,14 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
 {
     #ifdef ENABLE_DEBUG
     ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-        "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ")", f->c->remote_ip, inputlen);
+        "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ")", CONN_REMOTE_IP(f->c), inputlen);
     #endif
         
     // Loop while there's input to process
     while(inputlen > 0) {
         #ifdef ENABLE_DEBUG
         ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-        "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ", state %d)", f->c->remote_ip, inputlen, cfg->state);
+        "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ", state %d)", CONN_REMOTE_IP(f->c), inputlen, cfg->state);
         #endif
         
         // Are we looking for the next packet of data?
@@ -710,7 +716,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 if (inputlen < 4) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Less than 5 bytes from the packet available in this bucket",
-                        f->c->remote_ip);
+                        CONN_REMOTE_IP(f->c));
                     return -1;
                 }
                 
@@ -732,7 +738,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 if ((len <= 0)||(len > BUF_LIMIT)) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: TLS record too long: %" APR_SIZE_T_FMT "; limit %d",
-                        f->c->remote_ip, len, BUF_LIMIT);
+                        CONN_REMOTE_IP(f->c), len, BUF_LIMIT);
                     return -1;
                 }
             
@@ -745,7 +751,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 if (cfg->buf == NULL) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Failed to allocate %" APR_SIZE_T_FMT " bytes",
-                        f->c->remote_ip, len);
+                        CONN_REMOTE_IP(f->c), len);
                     return -1;
                 }
 
@@ -757,7 +763,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 #ifdef ENABLE_DEBUG                
                 ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
                     "mod_sslhaf [%s]: decode_bucket; buffering protocol %d high %d low %d len %" APR_SIZE_T_FMT,
-                    f->c->remote_ip, cfg->buf_protocol, cfg->protocol_high, cfg->protocol_low, len);
+                    CONN_REMOTE_IP(f->c), cfg->buf_protocol, cfg->protocol_high, cfg->protocol_low, len);
                 #endif
             }
             else
@@ -771,7 +777,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 if (inputlen < 4) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Less than 5 bytes from the packet available in this bucket",
-                        f->c->remote_ip);
+                        CONN_REMOTE_IP(f->c));
                     return -1;
                 }
                 
@@ -779,7 +785,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 if (inputbuf[1] != 1) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Not SSLv2 ClientHello (%d)",
-                        f->c->remote_ip, inputbuf[1]);
+                        CONN_REMOTE_IP(f->c), inputbuf[1]);
                     return -1;
                 }
                 
@@ -802,7 +808,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 if ((len <= 0)||(len > BUF_LIMIT)) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: TLS record too long: %" APR_SIZE_T_FMT "; limit %d",
-                        f->c->remote_ip, len, BUF_LIMIT);
+                        CONN_REMOTE_IP(f->c), len, BUF_LIMIT);
                     return -1;
                 }
             
@@ -816,7 +822,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 if (cfg->buf == NULL) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Failed to allocate %" APR_SIZE_T_FMT " bytes",
-                        f->c->remote_ip, len);
+                        CONN_REMOTE_IP(f->c), len);
                     return -1;
                 }
 
@@ -858,7 +864,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 if (rc < 0) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Packet decoding error rc %d (hello %d)",
-                        f->c->remote_ip, rc, cfg->hello_version);
+                        CONN_REMOTE_IP(f->c), rc, cfg->hello_version);
                     return -1;
                 }
 
@@ -910,7 +916,7 @@ static apr_status_t sslhaf_out_filter(ap_filter_t *f, apr_bucket_brigade *bb) {
             if (status != APR_SUCCESS) {
                 ap_log_error(APLOG_MARK, APLOG_ERR, status, f->c->base_server,
                     "mod_sslhaf [%s]: Error while reading output bucket",
-                    f->c->remote_ip);
+                    CONN_REMOTE_IP(f->c));
                 return status;
             }
             
@@ -969,7 +975,7 @@ static apr_status_t sslhaf_in_filter(ap_filter_t *f,
             if (status != APR_SUCCESS) {
                 ap_log_error(APLOG_MARK, APLOG_ERR, status, f->c->base_server,
                     "mod_sslhaf [%s]: Error while reading input bucket",
-                    f->c->remote_ip);
+                    CONN_REMOTE_IP(f->c));
                 return status;
             }
             
