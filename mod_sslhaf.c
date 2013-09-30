@@ -282,7 +282,7 @@ unsigned char *c2x(unsigned what, unsigned char *where) {
  * Logs the current Client Hello to the error log.
  */
 static void log_client_hello(ap_filter_t *f, sslhaf_cfg_t *cfg) {
-    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, f->c->base_server,
+    ap_log_error(APLOG_MARK, APLOG_INFO, 0, f->c->base_server,
         "mod_sslhaf [%s]: Client Hello: handshake %d, protocol %d.%d, extensions %d",
         CONN_REMOTE_IP(f->c), cfg->hello_version, cfg->protocol_high, cfg->protocol_low, cfg->extensions_len);
 }
