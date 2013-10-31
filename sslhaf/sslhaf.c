@@ -234,6 +234,7 @@ void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg) {
 
                 for (unsigned int names_count = 0;
                         names_count < sni->server_names_len; names_count++) {
+                    cfg->free_fn(cfg, sni->server_names[names_count]);
                     sni->server_names[names_count] = NULL;
                 }
 
