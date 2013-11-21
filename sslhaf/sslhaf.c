@@ -250,6 +250,11 @@ void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg) {
         cfg->extensions = NULL;
     }
 
+    if (cfg->tclient_hello != NULL) {
+        cfg->free_fn(cfg, cfg->tclient_hello);
+        cfg->tclient_hello = NULL;
+    }
+
     if (cfg->thandshake != NULL) {
         temp_cfg.free_snprintf_fn(cfg, cfg->thandshake);
         cfg->thandshake = NULL;
@@ -424,6 +429,13 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
  * Decode SSLv3+ packet containing handshake data.
  */
 static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
+    unsigned char *p, *t;
+    char *q;
+    size_t msg_len;
+    size_t msg_to_go, section_to_go, sub_section_to_go, object_to_go;
+    size_t temp_to_go;
+    uint8_t msg_type;
+
     // Check for size first
     if (cfg->buf_len == 0) {
         if (cfg->log_fn != NULL)
@@ -441,6 +453,26 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
                 cfg->buf_len);
     #endif
 
+    // make a copy of the entire Client Hello and convert it to hex
+    cfg->tclient_hello = cfg->alloc_fn(cfg,
+        (cfg->buf_to_go * 2) + 1);
+    if (cfg->tclient_hello == NULL) {
+        SSLHAF_RETURN_ERROR(cfg, SSLHAF_NOMEM);
+    }
+
+    temp_to_go = cfg->buf_to_go;
+
+    t = cfg->buf;
+    q = cfg->tclient_hello;
+
+    // now encode the client hello
+    while (temp_to_go--) {
+        sslhaf_c2x(*t, q);
+        q += 2;
+        t += 1;
+    }
+    *q = '\0';
+
     // record packet information as strings
     cfg->thandshake = cfg->snprintf_fn(cfg,
         NULL, 0, "%i", cfg->hello_version);
@@ -455,13 +487,6 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
 
     // Loop while there's data in buffer
     while (cfg->buf_len > 0) {
-        unsigned char *p, *t;
-        char *q;
-        size_t msg_len;
-        uint16_t msg_to_go, section_to_go, sub_section_to_go, object_to_go;
-        uint16_t temp_to_go;
-        uint8_t msg_type;
-
         #ifdef SSLHAF_ENABLE_DEBUG
         if (cfg->log_fn != NULL)
             cfg->log_fn(cfg,

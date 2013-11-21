@@ -217,6 +217,11 @@ struct sslhaf_cfg_t {
     /* A list of details of all extensions seen in the handshake. */
     sslhaf_extension_t **extensions;
 
+    /* The entire raw handshake packet, consisting of a record layer packet
+     * with a Client Hello inside it.
+     * Encoded as a string of hexadecimal characters. */
+    char *tclient_hello;
+
     /* Handshake version as string. */
     char *thandshake;
 

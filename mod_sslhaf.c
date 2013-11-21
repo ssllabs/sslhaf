@@ -110,6 +110,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  *   CustomLog logs/sslhaf.log "YOUR_LOG_STRING_HERE" env=SSLHAF_LOG
  *
+ * - SSLHAF_RAW contains the entire raw Client Hello, encoded as a hex string.
+ *
  */
 
 #include "ap_config.h"
@@ -435,6 +437,12 @@ static int mod_sslhaf_post_request(request_rec *r) {
 
         apr_table_setn(r->subprocess_env, "SSLHAF_IP_HASH", ipaddress_hash);
         #endif
+
+        if (cfg->tclient_hello != NULL) {
+            apr_table_setn(r->subprocess_env, "SSLHAF_RAW", tcfg->client_hello);
+        } else {
+            apr_table_setn(r->subprocess_env, "SSLHAF_RAW", "-");
+        }
     }
 
     return DECLINED;
