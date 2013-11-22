@@ -543,6 +543,13 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
             SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
         }
 
+        // Use the version number from Client Hello, overriding the
+        // value we got earlier. Some clients will always set the
+        // version number in the Record Layer to TLS 1.0, even if they
+        // support better protocols.            
+        cfg->protocol_high = p[0];
+        cfg->protocol_low = p[1];
+
         p += 2; // version number
         p += 32; // random value
         msg_to_go -= 34;
@@ -993,8 +1000,12 @@ int sslhaf_decode_buffer(sslhaf_cfg_t *cfg,
                 }
 
                 cfg->hello_version = 3;
-                cfg->protocol_high = inputbuf[0];
-                cfg->protocol_low = inputbuf[1];
+                // Remember the protocol version used,
+                // but only if we don't already have it
+                if (cfg->protocol_high == 0) {
+                    cfg->protocol_high = inputbuf[0];
+                    cfg->protocol_low = inputbuf[1];
+                }
 
                 // Go over the version bytes
                 inputbuf += 2;
