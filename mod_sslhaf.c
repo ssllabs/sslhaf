@@ -135,7 +135,16 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "sslhaf.h"
 
+
+#if (AP_SERVER_MAJORVERSION_NUMBER >= 2) && (AP_SERVER_MINORVERSION_NUMBER > 3)
+#define SSLHAF_AP_CONN_REMOTE_IP(C) ((C)->client_ip)
+#else
+#define SSLHAF_AP_CONN_REMOTE_IP(C) ((C)->remote_ip)
+#endif
+
+
 module AP_MODULE_DECLARE_DATA sslhaf_module;
+
 
 static const char mod_sslhaf_in_filter_name[] = "SSLHAF_IN";
 static const char mod_sslhaf_out_filter_name[] = "SSLHAF_OUT";
@@ -229,7 +238,7 @@ static void mod_sslhaf_log(sslhaf_cfg_t *cfg, const char *format, ...) {
         return;
 
     len = apr_snprintf(mod_sslhaf_log_buf, MAX_STRING_LEN,
-        "mod_sslhaf [%s]: ", c->remote_ip);
+        "mod_sslhaf [%s]: ", SSLHAF_AP_CONN_REMOTE_IP(c));
     if (len == 0)
         return;
 
@@ -274,7 +283,7 @@ static apr_status_t mod_sslhaf_out_filter(ap_filter_t *f, apr_bucket_brigade *bb
             if (status != APR_SUCCESS) {
                 ap_log_error(APLOG_MARK, APLOG_ERR, status, f->c->base_server,
                     "mod_sslhaf [%s]: Error while reading output bucket",
-                    f->c->remote_ip);
+                    SSLHAF_AP_CONN_REMOTE_IP(f->c));
                 return status;
             }
 
@@ -334,7 +343,7 @@ static apr_status_t mod_sslhaf_in_filter(ap_filter_t *f,
             if (status != APR_SUCCESS) {
                 ap_log_error(APLOG_MARK, APLOG_ERR, status, f->c->base_server,
                     "mod_sslhaf [%s]: Error while reading input bucket",
-                    f->c->remote_ip);
+                    SSLHAF_AP_CONN_REMOTE_IP(f->c));
                 return status;
             }
 
@@ -377,7 +386,7 @@ static int mod_sslhaf_pre_conn(conn_rec *c, void *csd) {
 
     #ifdef ENABLE_DEBUG
     ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, c->base_server,
-        "mod_sslhaf: Connection from %s", c->remote_ip);
+        "mod_sslhaf: Connection from %s", SSLHAF_AP_CONN_REMOTE_IP(c));
     #endif
 
     return OK;
@@ -430,7 +439,8 @@ static int mod_sslhaf_post_request(request_rec *r) {
         #if 0
         // Generate a sha1 of the remote address on the first request
         const char* ipaddress_hash = mod_sslhaf_generate_sha1(r->connection->pool,
-            r->connection->remote_ip, strlen(r->connection->remote_ip));
+            SSLHAF_AP_CONN_REMOTE_IP(r->connection),
+            strlen(SSLHAF_AP_CONN_REMOTE_IP(r->connection)));
         if (ipaddress_hash == NULL) {
             return DECLINED;
         }
