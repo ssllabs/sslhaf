@@ -379,6 +379,8 @@ static int mod_sslhaf_pre_conn(conn_rec *c, void *csd) {
     if (cfg == NULL)
         return OK;
 
+    sslhaf_cfg_set_create_strings(cfg, true);
+
     ap_set_module_config(c->conn_config, &sslhaf_module, cfg);
 
     ap_add_input_filter(mod_sslhaf_in_filter_name, NULL, NULL, c);

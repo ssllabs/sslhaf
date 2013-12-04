@@ -273,6 +273,10 @@ struct sslhaf_cfg_t {
     void (*free_snprintf_fn)(struct sslhaf_cfg_t *cfg, void *buf);
     /* A pointer to an error logging printf style function. */
     void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...);
+
+    /* User configuration flag indicating whether printable text copies of
+     * handshake information should be made. OFF by default. */
+    bool do_create_strings;
 };
 
 typedef struct sslhaf_cfg_t sslhaf_cfg_t;
@@ -310,6 +314,16 @@ sslhaf_cfg_t *sslhaf_cfg_create(
             char *msgbuf, size_t len, const char *format, ...),
     void (*free_snprintf_fn)(struct sslhaf_cfg_t *cfg, void *buf),
     void (*log_fn)(struct sslhaf_cfg_t *cfg, const char *format, ...));
+
+/**
+ * Retrieve configuration flag indicating whether printable text copies of
+ * handshake information should be made. */
+bool sslhaf_cfg_get_create_strings(const sslhaf_cfg_t *cfg);
+
+/**
+ * Set the configuration flag indicating whether printable text copies of
+ * handshake information should be made. */
+void sslhaf_cfg_set_create_strings(sslhaf_cfg_t *cfg, bool create_strings);
 
 /**
  * Cleanup and free a sslhaf_cfg object
