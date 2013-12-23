@@ -101,6 +101,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *   client (NULL 00, DEFLATE 01). The field can be NULL, in which case it will appear
  *   in the logs as "-". This happens when SSLv2 handshake is used.
  *
+ * - SSL_EXTENSIONS_LEN contains the number of extensions seen, for example "5".
+ *
+ * - SSL_EXTENSIONS contains the IDs of the submitted extensions, in the order in which they
+ *   were sent. For example "000b,000a,0023,000d,000f".
+ *
  * - SSLHAF_LOG is defined (and contains "1") only on the first request in a connection. This
  *   variable can be used to reduce the amount of logging (SSL parameters will typically not
  *   change across requests on the same connection). Example:
