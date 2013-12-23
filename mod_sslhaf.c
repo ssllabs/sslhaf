@@ -71,8 +71,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  *     CustomLog logs/sslhaf.log "%t %h \"%{SSLHAF_HANDSHAKE}e\" \
  *     \"%{SSLHAF_PROTOCOL}e\" \"%{SSLHAF_SUITES}e\" \"%{SSLHAF_COMPRESSION}e\" \
- *     \"%{SSLHAF_BEAST}e\" \"%{SSLHAF_EXTENSIONS_LEN}e\" \"%{SSLHAF_EXTENSIONS}e\" \
- *     \"%{User-Agent}i\"" 
+ *     \"%{SSLHAF_EXTENSIONS_LEN}e\" \"%{SSLHAF_EXTENSIONS}e\" \"%{User-Agent}i\"" 
  *
  * | NOTE A CustomLog directive placed in the main server context,
  * |      will not record any traffic arriving to virtual hosts.
@@ -97,8 +96,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *   corresponds to one cipher suite. From the example, 0x04 stands for SSL_RSA_WITH_RC4_128_MD5,
  *   0x010080 stands for SSL_CK_RC4_128_WITH_MD5 (a SSLv2 suite) and 0x05 stands
  *   for SSL_RSA_WITH_RC4_128_SHA.
- *
- * - SSLHAF_BEAST is 1 if the 1/n-1 BEAST mitigation was detected, 0 otherwise. 
  *
  * - SSLHAF_COMPRESSION contains the list of compression methods offered by the
  *   client (NULL 00, DEFLATE 01). The field can be NULL, in which case it will appear
@@ -1049,12 +1046,14 @@ static int sslhaf_post_request(request_rec *r) {
         apr_table_setn(r->subprocess_env, "SSLHAF_PROTOCOL", cfg->tprotocol);
         apr_table_setn(r->subprocess_env, "SSLHAF_SUITES", cfg->tsuites);
         
+        #if 0
         // BEAST mitigation detection
         if (cfg->in_data_fragments > 1) {
             apr_table_setn(r->subprocess_env, "SSLHAF_BEAST", "1");
         } else {
             apr_table_setn(r->subprocess_env, "SSLHAF_BEAST", "0");
         }
+        #endif
         
         // Expose compression methods
         apr_table_setn(r->subprocess_env, "SSLHAF_COMPRESSION", cfg->compression_methods);
