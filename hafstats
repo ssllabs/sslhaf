@@ -11,7 +11,7 @@ $BROWSERS_ONLY = true;
 
 // NOTE: This script is work in progress.
 
-$pattern = "/^([^]]+\]) (\S+) \"(\\d+)\" \"([\\d.]+)\" \"([\\w,]+)\" \"([-0-9,]+)\" \"([01])\" \"(\\d+)\" \"([-0-9a-zA-Z,]+)\" \"(.*)\"$/";
+$pattern = "/^([^]]+\]) (\S+) \"(\\d+)\" \"([\\d.]+)\" \"([\\w,]+)\" \"([-0-9,]+)\" \"([01])\" \"(\\d+)\" \"([-0-9a-zA-Z,]+)\"(?: \"([-0-9a-zA-Z]+)\")? \"(.*)\"$/";
 
 
 // Known TLS extensions
@@ -425,8 +425,13 @@ while($line = fgets($fh)) {
 			}
 		}
 		 
-		$he->ua = $matches[10];
-		// print_r($he);
+		if (isset($matches[11])) {
+			$he->client_hello = $matches[10];
+			$he->ua = $matches[11];
+		} else {
+			$he->client_hello = "-";
+			$he->ua = $matches[10];
+		}
 
 		$tempResults[$he->ip . "_" . $he->ua] = $he;
 	} else {
@@ -441,11 +446,15 @@ $results = array_values($tempResults);
 
 // echo("Unique clients: " . count($results) . "\n");
 
+$stats = new stdClass();
 $stats->total = 0;
 $stats->beast_mitigated = 0;
 $stats->protocols = array();
 $stats->compression_support = 0;
 $stats->secure_renegotiation = 0;
+$stats->handshake = array();
+$stats->suites = array();
+$stats->extensions = array();
 
 foreach($results as $he) {
 	// Is a browser?

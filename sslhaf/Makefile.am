@@ -1,6 +1,6 @@
 
 h_sources = sslhaf.h
-c_sources = sslhaf.c
+c_sources = sslhaf_suites.c sslhaf.c
 
 library_includedir = $(includedir)/$(GENERIC_LIBRARY_NAME)
 library_include_HEADERS = $(h_sources)
@@ -14,3 +14,5 @@ lib_LTLIBRARIES= libsslhaf.la
 libsslhaf_la_SOURCES= $(h_sources) $(c_sources)
 libsslhaf_la_LDFLAGS= -version-info $(GENERIC_LIBRARY_VERSION) -release $(GENERIC_RELEASE)
 
+sslhaf_suites.c: ../gen_sslhaf_suites.pl ../suites.csv
+	cat ../suites.csv | ../gen_sslhaf_suites.pl > sslhaf_suites.c
