@@ -997,6 +997,7 @@ static apr_status_t sslhaf_in_filter(ap_filter_t *f,
             // Look into the bucket                
             if (decode_bucket(f, cfg, (const unsigned char *)buf, buflen) <= 0) {
                 cfg->state = STATE_GOAWAY;
+                return APR_SUCCESS;
             }
         }
     }
