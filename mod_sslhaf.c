@@ -649,7 +649,9 @@ static int decode_packet_v3(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     /* Handshake */
     if (cfg->buf_protocol == PROTOCOL_HANDSHAKE) {
         if (cfg->seen_cipher_change == 0) {
-            return decode_packet_v3_handshake(f, cfg);
+            int rc = decode_packet_v3_handshake(f, cfg);
+            cfg->state = STATE_GOAWAY;
+            return rc;
         } else {
             // Ignore encrypted handshake messages
             return 1;
@@ -1023,7 +1025,7 @@ static int sslhaf_pre_conn(conn_rec *c, void *csd) {
     ap_set_module_config(c->conn_config, &sslhaf_module, cfg);
 
     ap_add_input_filter(sslhaf_in_filter_name, NULL, NULL, c);
-    ap_add_output_filter(sslhaf_out_filter_name, NULL, NULL, c);
+    //ap_add_output_filter(sslhaf_out_filter_name, NULL, NULL, c);
 
     #ifdef ENABLE_DEBUG    
     ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, c->base_server,
@@ -1109,8 +1111,8 @@ static void register_hooks(apr_pool_t *p) {
 
     ap_register_input_filter(sslhaf_in_filter_name, sslhaf_in_filter,
         NULL, AP_FTYPE_NETWORK - 1);
-    ap_register_output_filter(sslhaf_out_filter_name, sslhaf_out_filter,
-        NULL, AP_FTYPE_NETWORK - 1);
+    //ap_register_output_filter(sslhaf_out_filter_name, sslhaf_out_filter,
+    //    NULL, AP_FTYPE_NETWORK - 1);
 }
 
 module AP_MODULE_DECLARE_DATA sslhaf_module = {
