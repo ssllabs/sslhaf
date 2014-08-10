@@ -138,7 +138,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 module AP_MODULE_DECLARE_DATA sslhaf_module;
 
 static const char sslhaf_in_filter_name[] = "SSLHAF_IN";
-static const char sslhaf_out_filter_name[] = "SSLHAF_OUT";
 
 #if (AP_SERVER_MAJORVERSION_NUMBER >= 2) && (AP_SERVER_MINORVERSION_NUMBER > 3)
 #define CONN_REMOTE_IP(C) ((C)->client_ip)
@@ -189,18 +188,6 @@ struct sslhaf_cfg_t {
     /* SHA1 hash of the remote address. */
     const char *ipaddress_hash;
     
-    /* How many output buckets seen on a connection */
-    int out_bucket_count;
-
-    /* How many input data fragments seen before first output data fragment. */     
-    int in_data_fragments;
-    
-    /* How many output buckets sent before first input data fragment. */
-    int in_data_fragment_out_buckets;
-
-    /* Indicates the connection has switched to encrypted handshake messages. */
-    int seen_cipher_change;
-
     /* How many compression methods are there. */    
     int compression_len;
 
@@ -648,37 +635,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 static int decode_packet_v3(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     /* Handshake */
     if (cfg->buf_protocol == PROTOCOL_HANDSHAKE) {
-        if (cfg->seen_cipher_change == 0) {
-            int rc = decode_packet_v3_handshake(f, cfg);
-            cfg->state = STATE_GOAWAY;
-            return rc;
-        } else {
-            // Ignore encrypted handshake messages
-            return 1;
-        }
-    } else
-    /* Application data */
-    if (cfg->buf_protocol == PROTOCOL_APPLICATION) {
-        // On first data fragment, remember how many
-        // output buckets we have seen so far
-        if (cfg->in_data_fragments == 0) {
-            cfg->in_data_fragment_out_buckets = cfg->out_bucket_count;
-            cfg->in_data_fragments++;
-        } else {
-            // Increment data fragement counter for as
-            // long as the output bucket counter remains
-            // the same
-            if (cfg->out_bucket_count == cfg->in_data_fragment_out_buckets) {
-                cfg->in_data_fragments++;
-            }
-        }
-        
-        return 1;
-    } else
-    /* Change cipher spec */
-    if (cfg->buf_protocol == PROTOCOL_CHANGE_CIPHER_SPEC) {
-        cfg->seen_cipher_change = 1;
-        return 1;
+        return decode_packet_v3_handshake(f, cfg);
     } else {
         // Ignore unknown protocols
         return 1;
@@ -885,8 +842,9 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                     return -1;
                 }
 
-                // Go back to looking at the next packet
-                cfg->state = STATE_READING;
+                // Stop following this connection; we're only interested
+                // in the first TLS record.
+                cfg->state = STATE_GOAWAY;
 
                 return rc;
             } else {
@@ -902,47 +860,6 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
     }
     
     return 1;
-}
-
-/**
- * Monitor outbound data and count buckets. This will help us determine
- * if input data is fragmented (we see more than one inbound bucket before
- * we see one outbound bucket).
- */
-static apr_status_t sslhaf_out_filter(ap_filter_t *f, apr_bucket_brigade *bb) {
-    sslhaf_cfg_t *cfg = ap_get_module_config(f->c->conn_config, &sslhaf_module);
-    apr_status_t status;
-    apr_bucket *bucket;
-
-    // Return straight away if there's no configuration
-    if (cfg == NULL) {
-        return ap_pass_brigade(f->next, bb);
-    }    
-    
-    // Loop through the buckets
-    for (bucket = APR_BRIGADE_FIRST(bb);
-        bucket != APR_BRIGADE_SENTINEL(bb);
-        bucket = APR_BUCKET_NEXT(bucket))
-    {
-        const char *buf = NULL;
-        apr_size_t buflen = 0;
-        
-        if (!(APR_BUCKET_IS_METADATA(bucket))) {
-            // Get bucket data
-            status = apr_bucket_read(bucket, &buf, &buflen, APR_BLOCK_READ);
-            if (status != APR_SUCCESS) {
-                ap_log_error(APLOG_MARK, APLOG_ERR, status, f->c->base_server,
-                    "mod_sslhaf [%s]: Error while reading output bucket",
-                    CONN_REMOTE_IP(f->c));
-                return status;
-            }
-            
-            // Count output buckets
-            cfg->out_bucket_count++;
-        }
-    }                                  
-    
-    return ap_pass_brigade(f->next, bb);
 }
 
 /**
@@ -969,12 +886,10 @@ static apr_status_t sslhaf_in_filter(ap_filter_t *f,
         return ap_get_brigade(f->next, bb, mode, block, readbytes);
     }
 
-    // Get brigade
+    // Get the brigade
     status = ap_get_brigade(f->next, bb, mode, block, readbytes);
     if (status != APR_SUCCESS) {
-        // Do not log, since we're passing the status anyway
         cfg->state = STATE_GOAWAY;
-        
         return status;
     }
 
@@ -1001,6 +916,11 @@ static apr_status_t sslhaf_in_filter(ap_filter_t *f,
                 cfg->state = STATE_GOAWAY;
                 return APR_SUCCESS;
             }
+
+            // If there's no more work left to be done, break away            
+            if (cfg->state == STATE_GOAWAY) {
+                return APR_SUCCESS;
+            }
         }
     }
     
@@ -1013,19 +933,12 @@ static apr_status_t sslhaf_in_filter(ap_filter_t *f,
 static int sslhaf_pre_conn(conn_rec *c, void *csd) {
     sslhaf_cfg_t *cfg = NULL;
     
-    // TODO Can we determine if SSL is enabled on this connection
-    //      and don't bother if it isn't? It is actually possible that
-    //      someone speaks SSL on a non-SSL connection, but we won't
-    //      be able to detect that. It wouldn't matter, though, because
-    //      Apache will not process such a request.
-
     cfg = apr_pcalloc(c->pool, sizeof(*cfg));
     if (cfg == NULL) return OK;
     
     ap_set_module_config(c->conn_config, &sslhaf_module, cfg);
 
     ap_add_input_filter(sslhaf_in_filter_name, NULL, NULL, c);
-    //ap_add_output_filter(sslhaf_out_filter_name, NULL, NULL, c);
 
     #ifdef ENABLE_DEBUG    
     ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, c->base_server,
@@ -1054,15 +967,6 @@ static int sslhaf_post_request(request_rec *r) {
         apr_table_setn(r->subprocess_env, "SSLHAF_PROTOCOL", cfg->tprotocol);
         apr_table_setn(r->subprocess_env, "SSLHAF_SUITES", cfg->tsuites);
         
-        #if 0
-        // BEAST mitigation detection
-        if (cfg->in_data_fragments > 1) {
-            apr_table_setn(r->subprocess_env, "SSLHAF_BEAST", "1");
-        } else {
-            apr_table_setn(r->subprocess_env, "SSLHAF_BEAST", "0");
-        }
-        #endif
-        
         // Expose compression methods
         apr_table_setn(r->subprocess_env, "SSLHAF_COMPRESSION", cfg->compression_methods);
         
@@ -1089,7 +993,7 @@ static int sslhaf_post_request(request_rec *r) {
         apr_table_setn(r->subprocess_env, "SSLHAF_IP_HASH", cfg->ipaddress_hash);
         #endif
         
-        // Raw Client Hello
+        // Raw ClientHello
         if (cfg->client_hello != NULL) {
             apr_table_setn(r->subprocess_env, "SSLHAF_RAW", cfg->client_hello);
         } else {
@@ -1111,8 +1015,6 @@ static void register_hooks(apr_pool_t *p) {
 
     ap_register_input_filter(sslhaf_in_filter_name, sslhaf_in_filter,
         NULL, AP_FTYPE_NETWORK - 1);
-    //ap_register_output_filter(sslhaf_out_filter_name, sslhaf_out_filter,
-    //    NULL, AP_FTYPE_NETWORK - 1);
 }
 
 module AP_MODULE_DECLARE_DATA sslhaf_module = {
