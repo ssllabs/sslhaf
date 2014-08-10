@@ -688,7 +688,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 
                 // Are there enough bytes to begin analysis?            
                 if (inputlen < 4) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
+                    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Less than 5 bytes from the packet available in this bucket",
                         CONN_REMOTE_IP(f->c));
                     return -1;
@@ -749,7 +749,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 
                 // Are there enough bytes to begin analysis?            
                 if (inputlen < 4) {
-                    ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
+                    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Less than 5 bytes from the packet available in this bucket",
                         CONN_REMOTE_IP(f->c));
                     return -1;
