@@ -624,6 +624,10 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
         "mod_sslhaf [%s]: decode_bucket (inputlen %" APR_SIZE_T_FMT ", state %d)", CONN_REMOTE_IP(f->c), inputlen, cfg->state);
         #endif
         
+        if (cfg->state == STATE_GOAWAY) {
+            return 1;
+        }
+        
         // Are we looking for the next packet of data?
         if ((cfg->state == STATE_START)||(cfg->state == STATE_READING)) {
             apr_size_t len;
@@ -798,6 +802,10 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                 free(cfg->buf);
                 cfg->buf = NULL;
                 
+                // Stop following this connection; we're only interested in
+                // ClientHello, which is always the first client message.
+                cfg->state = STATE_GOAWAY;
+                
                 if (rc < 0) {
                     ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
                         "mod_sslhaf [%s]: Packet decoding error rc %d (hello %d)",
@@ -805,10 +813,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                     return -1;
                 }
 
-                // Stop following this connection; we're only interested in the first TLS record.
-                cfg->state = STATE_GOAWAY;
-
-                return rc;
+                return 1;
             } else {
                 // There's not enough data; copy what we can and
                 // we'll get the rest later
