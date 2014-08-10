@@ -365,84 +365,57 @@ static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     unsigned char *buf = cfg->buf;
     apr_size_t len = cfg->buf_len;
-    
-    #ifdef ENABLE_DEBUG
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-        "mod_sslhaf [%s]: decode_packet_v3_handshake (len %" APR_SIZE_T_FMT ")",
-        CONN_REMOTE_IP(f->c), len);
-    #endif
+    apr_size_t ml;
         
-    // Loop while there's data in buffer
-    while(len > 0) {
-        apr_size_t ml;
-        int mt;
-        
-        #ifdef ENABLE_DEBUG
-        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-            "mod_sslhaf [%s]: decode_packet_v3_handshake loop (len %" APR_SIZE_T_FMT,
+    // Check for the minimum size first (1 byte for
+    // message type and 3 bytes for message size)
+    if (len < 4) {
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
+            "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Packet too small %" APR_SIZE_T_FMT,
             CONN_REMOTE_IP(f->c), len);
-        #endif
-
-        // Check for size first        
-        if (len < 4) {
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Packet too small %" APR_SIZE_T_FMT,
-                CONN_REMOTE_IP(f->c), len);
+        return -1;
+    }
         
-            return -1;
-        }
+    // We can only process ClientHello messages
+    if (buf[0] != 1) {
+        return 1;
+    }
         
-        // Message type
-        mt = buf[0];
+    // Message length
+    ml = (buf[1] * 65536) + (buf[2] * 256) + buf[3];
         
-        // Message length
-        ml = (buf[1] * 65536) + (buf[2] * 256) + buf[3];
+    // Does the message length correspond
+    // to the size of our buffer?
+    if (ml > len - 4) {
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
+            "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
+            APR_SIZE_T_FMT " got %" APR_SIZE_T_FMT, CONN_REMOTE_IP(f->c), ml, len - 4);
+        return -2;
+    }
         
-        #ifdef ENABLE_DEBUG
-        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, f->c->base_server,
-            "mod_sslhaf [%s]: decode_packet_v3_handshake mt %d %" APR_SIZE_T_FMT,
-            CONN_REMOTE_IP(f->c), mt, ml);
-        #endif
-        
-        if (mt != 1) {
-            return 1;
-        }        
-        
-        // Does the message length correspond
-        // to the size of our buffer?
-        if (ml > len - 4) {
-            ap_log_error(APLOG_MARK, APLOG_ERR, 0, f->c->base_server,
-                "mod_sslhaf [%s]: Decoding packet v3 HANDSHAKE: Length mismatch. Expecting %"
-                APR_SIZE_T_FMT " got %" APR_SIZE_T_FMT, CONN_REMOTE_IP(f->c), ml, len - 4);
-        
-            return -2;
-        }
-        
-        // Is this a Client Hello message?    
-        if (mt == 1) {
-            unsigned char *p; 
-            unsigned char *q;
-            apr_size_t mylen = ml;
-            int idlen;
-            int cslen;
+    unsigned char *p; 
+    unsigned char *q;
+    apr_size_t mylen = ml;
+    apr_size_t idlen;
+    apr_size_t cslen;
                         
-            // make a copy of the entire Client Hello and convert it to hex
+    // Make a copy of the entire TLS record with ClientHello in it and convert it to hex
 
-            p = buf;            
-            cslen = len;
-            q = apr_pcalloc(f->c->pool, 10 + cslen * 2 + 1);
-            cfg->client_hello = (const char *)q;
+    p = buf;            
+    cslen = len;
+    q = apr_pcalloc(f->c->pool, 10 + cslen * 2 + 1);
+    cfg->client_hello = (const char *)q;
             
-            c2x(0x16, q);
-            q += 2;
-            c2x(cfg->protocol_high, q);
-            q += 2;
-            c2x(cfg->protocol_low, q);
-            q += 2;
-            c2x((mylen + 4) >> 8, q);
-            q += 2;
-            c2x((mylen + 4) & 0xff, q);
-            q += 2;
+    c2x(0x16, q); // Handshake protocol
+    q += 2;
+    c2x(cfg->protocol_high, q);
+    q += 2;
+    c2x(cfg->protocol_low, q);
+    q += 2;
+    c2x((mylen + 4) >> 8, q);
+    q += 2;
+    c2x((mylen + 4) & 0xff, q);
+    q += 2;
 
             while(cslen--) {
                 c2x(*p, q);
@@ -512,7 +485,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             cfg->tsuites = (const char *)q;
             
             // Extract cipher suites; each suite consists of 2 bytes
-            while(cslen--) {
+            while (cslen--) {
                 if ((const char *)q != cfg->tsuites) {
                     *q++ = ',';
                 }
@@ -615,15 +588,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             
             *q = '\0';
 
-            log_client_hello(f, cfg);
-        }
-            
-        // Skip over the message
-        len -= 4;
-        len -= ml;
-        buf += 4;
-        buf += ml;              
-    }
+    log_client_hello(f, cfg);
     
     return 1;
 }
@@ -632,7 +597,6 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
  * Decode SSLv3+ packet data.
  */
 static int decode_packet_v3(ap_filter_t *f, sslhaf_cfg_t *cfg) {
-    /* Handshake */
     if (cfg->buf_protocol == PROTOCOL_HANDSHAKE) {
         return decode_packet_v3_handshake(f, cfg);
     } else {
