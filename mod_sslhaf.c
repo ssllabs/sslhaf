@@ -4,7 +4,7 @@ mod_sslhaf: Apache module for passive SSL client fingerprinting
  
  | THIS PRODUCT IS NOT READY FOR PRODUCTION USE. DEPLOY AT YOUR OWN RISK.
 
-Copyright (c) 2009-2013, Qualys, Inc.
+Copyright (c) 2009-2014, Qualys, Inc.
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -214,12 +214,12 @@ typedef struct sslhaf_cfg_t sslhaf_cfg_t;
 
 #define BUF_LIMIT 	16384
 
-#define PROTOCOL_CHANGE_CIPHER_SPEC 	20
-#define PROTOCOL_HANDSHAKE		22
-#define PROTOCOL_APPLICATION		23
+#define PROTOCOL_CHANGE_CIPHER_SPEC     20
+#define PROTOCOL_HANDSHAKE              22
+#define PROTOCOL_APPLICATION            23
 
 /**
- * Convert the bytes given on input into their hexadecimal representation.
+ * Convert input bytes given into their hexadecimal representation.
  */
 char *bytes2hex(apr_pool_t *pool, unsigned char *data, int len) {
     static unsigned char b2hex[] = "0123456789abcdef";
@@ -842,8 +842,7 @@ static int decode_bucket(ap_filter_t *f, sslhaf_cfg_t *cfg,
                     return -1;
                 }
 
-                // Stop following this connection; we're only interested
-                // in the first TLS record.
+                // Stop following this connection; we're only interested in the first TLS record.
                 cfg->state = STATE_GOAWAY;
 
                 return rc;
