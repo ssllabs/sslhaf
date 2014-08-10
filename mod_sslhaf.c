@@ -165,7 +165,7 @@ struct sslhaf_cfg_t {
     unsigned int protocol_low;
     
     /* How many suites are there? */
-    unsigned int slen; 			
+    apr_size_t slen; 			
     
     /* Pointer to the first suite. Do note that a v3 suites consumes
      * 2 bytes whereas a v2 suite consumes 3 bytes. You need to check
@@ -282,7 +282,7 @@ static void log_client_hello(ap_filter_t *f, sslhaf_cfg_t *cfg) {
 static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     unsigned char *buf = cfg->buf;
     apr_size_t len = cfg->buf_len;
-    int cslen;
+    apr_size_t cslen;
     unsigned char *q;
 
     // There are 6 bytes before the list of cipher suites:
@@ -300,7 +300,7 @@ static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     len -= 6;
 
     // Check that we have the suites in the buffer.
-    if (len < (apr_size_t)cslen) {
+    if (len < cslen) {
         return -2;
     }
 
@@ -318,9 +318,8 @@ static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
                 
     // Create a list of suites as text, for logging. Each 3-byte
     // suite can consume up to 6 bytes (in hexadecimal form) with
-    // an additional byte for a comma. We need 9 bytes at the
-    // beginning (handshake and version), as well as a byte for
-    // the terminating NUL byte.
+    // an additional byte for a comma. We also need one more byte
+    // for the final NUL.
     q = apr_pcalloc(f->c->pool, (cslen * 7) + 1);
     if (q == NULL) {
         return -3;
@@ -329,7 +328,7 @@ static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     cfg->tsuites = (const char *)q;
     
     // Extract cipher suites; each suite consists of 3 bytes.
-    while(cslen--) {
+    while (cslen--) {
         if ((const char *)q != cfg->tsuites) {
             *q++ = ',';
         }
