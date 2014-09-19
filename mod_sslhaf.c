@@ -280,10 +280,54 @@ static void log_client_hello(ap_filter_t *f, sslhaf_cfg_t *cfg) {
  * Decode SSLv2 packet.
  */
 static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
-    unsigned char *buf = cfg->buf;
-    apr_size_t len = cfg->buf_len;
     apr_size_t cslen;
     unsigned char *q;
+	
+	// First make a copy of the entire message and convert it to hex.
+	q = apr_pcalloc(f->c->pool, 10 + cfg->buf_len * 2 + 1);
+	if (q == NULL) return -1;
+	cfg->client_hello = (char *)q;
+	
+	// Length bytes.
+	
+	c2x(0x80, q);
+	q += 2;
+	
+	c2x(cfg->buf_len + 3, q);
+	q += 2;
+	
+	// Message type: ClientHello.
+	c2x(1, q);
+	q += 2;
+	
+	// Protocol version.
+	if ((cfg->protocol_high == 0x02)&&(cfg->protocol_low == 0x00)) {			
+		c2x(cfg->protocol_low, q);
+		q += 2;
+		c2x(cfg->protocol_high, q);
+		q += 2;
+	} else {	
+		c2x(cfg->protocol_high, q);
+		q += 2;
+		c2x(cfg->protocol_low, q);
+		q += 2;
+	}
+	
+	// Convert the remaining bytes.
+	unsigned char *mybuf = cfg->buf;
+	cslen = cfg->buf_len;
+	while(cslen--) {
+		c2x(*mybuf, q);
+		q += 2;
+		mybuf++;
+	}
+	
+	*q = '\0';	
+	
+	// Now parse the message.
+	
+	unsigned char *buf = cfg->buf;
+	apr_size_t len = cfg->buf_len;
 
     // There are 6 bytes before the list of cipher suites:
     // cipher suite length (2 bytes), session ID length (2 bytes)
