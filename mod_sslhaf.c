@@ -365,10 +365,7 @@ static int decode_packet_v2(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     // an additional byte for a comma. We also need one more byte
     // for the final NUL.
     q = apr_pcalloc(f->c->pool, (cslen * 7) + 1);
-    if (q == NULL) {
-        return -3;
-    }
-    
+    if (q == NULL) return -3;
     cfg->tsuites = (const char *)q;
     
     // Extract cipher suites; each suite consists of 3 bytes.
@@ -448,6 +445,7 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
     p = buf;            
     cslen = len;
     q = apr_pcalloc(f->c->pool, 10 + cslen * 2 + 1);
+	if (q == NULL) return -1;
     cfg->client_hello = (const char *)q;
             
     c2x(0x16, q); // Handshake protocol
@@ -525,7 +523,8 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             cfg->tprotocol = apr_psprintf(f->c->pool, "%d.%d", cfg->protocol_high, cfg->protocol_low);
             
             // Create a list of suites as text, for logging
-            q = apr_pcalloc(f->c->pool, (cslen * 7) + 1);            
+            q = apr_pcalloc(f->c->pool, (cslen * 7) + 1);
+			if (q == NULL) return -1;            
             cfg->tsuites = (const char *)q;
             
             // Extract cipher suites; each suite consists of 2 bytes
@@ -561,7 +560,8 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             }
             
             cfg->compression_len = clen;
-            q = apr_pcalloc(f->c->pool, (clen * 3) + 1);            
+            q = apr_pcalloc(f->c->pool, (clen * 3) + 1);
+			if (q == NULL) return -1;            
             cfg->compression_methods = (const char *)q;
             
             while(clen--) {
@@ -598,7 +598,8 @@ static int decode_packet_v3_handshake(ap_filter_t *f, sslhaf_cfg_t *cfg) {
             }
             
             cfg->extensions_len = 0;
-            q = apr_pcalloc(f->c->pool, (elen * 5) + 1);            
+            q = apr_pcalloc(f->c->pool, (elen * 5) + 1);
+			if (q == NULL) return -1;            
             cfg->extensions = (const char *)q;
             
             while(elen > 0) {
