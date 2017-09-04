@@ -206,6 +206,11 @@ void sslhaf_cfg_destroy(sslhaf_cfg_t *cfg) {
         cfg->buf = NULL;
     }
 
+    if (cfg->session_id != NULL) {
+        cfg->free_fn(cfg, cfg->session_id);
+        cfg->session_id = NULL;
+    }
+
     if (cfg->suites != NULL) {
         for (unsigned int suite_count = 0;
                 suite_count < cfg->suites_len; suite_count++) {
@@ -360,13 +365,26 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
         (cfg->buf[cfg->buf_off] * 256) +
         cfg->buf[cfg->buf_off + 1];
 
-    // Skip over to the list.
-    cfg->buf_off += 6;
-    cfg->buf_len -= 6;
-    cfg->buf_to_go -= 6;
+    // Skip over cipher length.
+    cfg->buf_off += 2;
+    cfg->buf_len -= 2;
+    cfg->buf_to_go -= 2;
 
-    cfg->input_used_session += 6;
-    cfg->input_used_total += 6;
+    cfg->input_used_session += 2;
+    cfg->input_used_total += 2;
+
+    // How many bytes does the session id consume?
+    cfg->session_id_len =
+       (cfg->buf[cfg->buf_off] * 256) +
+       cfg->buf[cfg->buf_off + 1];
+
+    // Skip over to the list.
+    cfg->buf_off += 4;
+    cfg->buf_len -= 4;
+    cfg->buf_to_go -= 4;
+
+    cfg->input_used_session += 4;
+    cfg->input_used_total += 4;
 
     // Check that we have the suites in the buffer.
     if (cfg->buf_len < section_to_go) {
@@ -434,6 +452,29 @@ static int sslhaf_decode_packet_v2(sslhaf_cfg_t *cfg) {
 
     if (section_to_go > 0) {
         SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
+    }
+
+    // Extract session id
+    if (cfg->session_id_len > 0) {
+        if (cfg->session_id_len > SSLHAF_SESSION_ID_LENGTH_LIMIT) {
+            SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
+        }
+
+        cfg->session_id = cfg->alloc_fn(cfg, cfg->session_id_len);
+        if (cfg->session_id == NULL) {
+            SSLHAF_RETURN_ERROR(cfg, SSLHAF_NOMEM);
+        }
+
+        memcpy(cfg->session_id,
+            cfg->buf + cfg->buf_off,
+            cfg->session_id_len);
+
+        cfg->buf_off += cfg->session_id_len;
+        cfg->buf_len -= cfg->session_id_len;
+        cfg->buf_to_go -= cfg->session_id_len;
+
+        cfg->input_used_session += cfg->session_id_len;
+        cfg->input_used_total += cfg->session_id_len;
     }
 
     return SSLHAF_OK;
@@ -570,20 +611,35 @@ static int sslhaf_decode_packet_v3_handshake(sslhaf_cfg_t *cfg) {
         p += 32; // random value
         msg_to_go -= 34;
 
-        if (msg_to_go < 1) { // for the ID length byte
+        if (msg_to_go < 1) { // for the session ID length byte
             SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
         }
 
-        section_to_go = p[0]; // length of ID section
+        section_to_go = p[0]; // length of session ID section
+        cfg->session_id_len = section_to_go;  // usually value is '32'
 
-        p += 1; // ID len
+        p += 1; // session ID len
         msg_to_go -= 1;
 
-        if (msg_to_go < section_to_go) { // for the ID
+        if (msg_to_go < section_to_go) { // for the session ID
             SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
         }
 
-        p += section_to_go; // seek past the ID
+        // Session ID
+        if (cfg->session_id_len > 0) {
+            if (cfg->session_id_len > SSLHAF_SESSION_ID_LENGTH_LIMIT) {
+                SSLHAF_RETURN_ERROR(cfg, SSLHAF_INVAL);
+            }
+
+            cfg->session_id = cfg->alloc_fn(cfg, cfg->session_id_len);
+            if (cfg->session_id == NULL) {
+                SSLHAF_RETURN_ERROR(cfg, SSLHAF_NOMEM);
+            }
+
+            memcpy(cfg->session_id, p, cfg->session_id_len);
+        }
+
+        p += section_to_go; // seek past the session ID
         msg_to_go -= section_to_go;
 
         if (msg_to_go < 2) { // for the CS length bytes

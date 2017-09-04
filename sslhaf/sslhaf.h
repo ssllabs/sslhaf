@@ -80,6 +80,8 @@ extern "C" {
 
 #define SSLHAF_BUF_LIMIT 16384
 
+#define SSLHAF_SESSION_ID_LENGTH_LIMIT 32
+
 #define SSLHAF_PROTOCOL_CHANGE_CIPHER_SPEC 20
 #define SSLHAF_PROTOCOL_HANDSHAKE 22
 #define SSLHAF_PROTOCOL_APPLICATION 23
@@ -198,6 +200,13 @@ struct sslhaf_cfg_t {
     /* SSL version indicated in the handshake. */
     uint8_t protocol_high;
     uint8_t protocol_low;
+
+    /* How many bytes are there for session id in the handshake? */
+    uint16_t session_id_len;
+
+    /* A session id might be seen in the handshake for session reuse.
+     * If session_id_len is 0, always NULL*/
+    unsigned char* session_id;
 
     /* How many suites are there? */
     uint16_t suites_len;
